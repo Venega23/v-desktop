@@ -28,7 +28,45 @@ jobs:
       - name: Проверить проект
         run: npm run check
 
-      - name: Собрать и опубликовать Windows-релиз
-        run: npx electron-builder --win nsis portable --publish always
+      - name: Собрать Windows-релиз
+        run: npx electron-builder --win --x64 --publish never
+
+      - name: Проверить обязательные файлы обновления
+        shell: pwsh
+        run: |
+          $version = node -p "require('./package.json').version"
+          $required = @(
+            "dist/latest.yml",
+            "dist/V-Setup-$version-x64.exe",
+            "dist/V-Setup-$version-x64.exe.blockmap",
+            "dist/V.exe"
+          )
+          foreach ($file in $required) {
+            if (-not (Test-Path -LiteralPath $file) -or (Get-Item -LiteralPath $file).Length -le 0) {
+              throw "Отсутствует обязательный файл релиза: $file"
+            }
+          }
+          $manifest = Get-Content -LiteralPath "dist/latest.yml" -Raw
+          if ($manifest -notmatch "version:\s+$([regex]::Escape($version))" -or $manifest -notmatch "sha512:" -or $manifest -notmatch "size:") {
+            throw "latest.yml не содержит версию, размер или SHA-512"
+          }
+
+      - name: Опубликовать GitHub Release
+        shell: pwsh
+        run: |
+          $version = node -p "require('./package.json').version"
+          $tag = "v$version"
+          $assets = @(
+            "dist/latest.yml",
+            "dist/V-Setup-$version-x64.exe",
+            "dist/V-Setup-$version-x64.exe.blockmap",
+            "dist/V.exe"
+          )
+          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag @assets --clobber --repo $env:GITHUB_REPOSITORY
+          } else {
+            gh release create $tag @assets --title "V $version" --generate-notes --target $env:GITHUB_SHA --repo $env:GITHUB_REPOSITORY
+          }
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
