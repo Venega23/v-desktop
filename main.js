@@ -61,7 +61,7 @@ const LIMITS = Object.freeze({
   apiKeyChars: 512,
   transcriptChars: 1200000,
   contextChars: 60000,
-  spaceChatContextChars: 950000
+  spaceChatContextChars: 160000
 });
 const launchedAtLogin = process.argv.includes('--autostart');
 
@@ -1669,7 +1669,7 @@ ${compactTextSample(safeTranscript, transcriptChars)}`;
     const safeContext = boundedString(context, LIMITS.spaceChatContextChars);
     if (safeMessage === null || safeContext === null || !safeMessage.trim() || !Array.isArray(history) || history.length > 40) return { ok:false, reason:'input_limit' };
     const safeHistory = [];
-    for (const item of history.slice(-16)) {
+    for (const item of history.slice(-8)) {
       if (!item || !['user','assistant'].includes(item.role)) return { ok:false, reason:'input_limit' };
       const text = boundedString(item.text, 6000);
       if (text === null) return { ok:false, reason:'input_limit' };
@@ -1691,6 +1691,7 @@ ${compactTextSample(safeTranscript, transcriptChars)}`;
     const languageRule = { uk:'Отвечай на украинском, если пользователь не пишет на другом языке.', ru:'Отвечай на русском, если пользователь не пишет на другом языке.', en:'Answer in English unless the user writes in another language.' }[language] || 'Use the language of the user.';
     const systemPrompt = `Ты — чат текущего рабочего пространства. ${languageRule}
 Используй только факты из ПАКЕТА ПРОСТРАНСТВА и явно отмечай, если сведений недостаточно. Не придумывай цены, условия, имена или решения.
+Материалы уже отобраны по смыслу: первые источники наиболее релевантны новой реплике. Если пользователь описывает ситуацию в форме «когда человек говорит…», «коли людина каже…» или спрашивает «что/що дальше», это просьба предложить готовый ответ и следующий шаг, даже без вопросительного знака.
 Ты умеешь: отвечать по материалам; кратко обобщать всё пространство; выбирать самое важное; выбирать только указанную пользователем тему; создавать отдельные карточки на доске.
 Ставь action="create_cards" только если пользователь явно просит создать, разложить, собрать, вынести или сложить карточки. В остальных случаях action="answer" и cards=[].
 При запросе «из всей информации» охвати все разные содержательные темы без повторов. При запросе «самое важное» отбирай только решения, точные ответы, условия, числа, риски и следующие действия. При фильтре пользователя включай только соответствующие материалы.
@@ -1704,11 +1705,11 @@ ${historyText || 'Это первое сообщение.'}
 
 НОВАЯ КОМАНДА ПОЛЬЗОВАТЕЛЯ:
 ${safeMessage.trim()}`;
-    const sendRequest = contextChars => requestTextCompletion({ system:systemPrompt, user:buildPrompt(contextChars), maxOutputTokens:4200, temperature:0.12, jsonSchema:schema, schemaName:'space_chat', timeoutMs:70000, preferGemini:contextChars > 420000 });
+    const sendRequest = contextChars => requestTextCompletion({ system:systemPrompt, user:buildPrompt(contextChars), maxOutputTokens:2600, temperature:0.12, jsonSchema:schema, schemaName:'space_chat', timeoutMs:55000 });
     try {
-      const initialContextChars = Math.min(820000, safeContext.length || 180000);
+      const initialContextChars = Math.min(120000, safeContext.length || 30000);
       let completion = await sendRequest(initialContextChars);
-      if (completion.reason === 'http_413') completion = await sendRequest(180000);
+      if (completion.reason === 'http_413') completion = await sendRequest(30000);
       if (!completion.ok) return completion;
       const parsed = parseJsonText(completion.text);
       const action = parsed?.action === 'create_cards' ? 'create_cards' : 'answer';
@@ -1975,6 +1976,13 @@ ${safeMessage.trim()}`;
       })()`);
       if (!aiState?.firstReady || !aiState?.secondReady || !String(aiState.secondAnswer || '').trim() || aiState.secondAnswer === aiState.firstAnswer) throw new Error(`ai_two_turn_pipeline_failed:${JSON.stringify(aiState)}`);
       console.log(`SLOY_AI_SMOKE_PROVIDER ${aiState.provider || 'unknown'} TWO_TURNS_READY`);
+      const workspaceAiState = await overlay.webContents.executeJavaScript(`(async () => {
+        const message = 'Коли людина каже, що вони вже навчаються у свого репетитора. Що відповісти далі?';
+        const result = await window.sloy.spaceChat({ message, history:[], context:buildSpaceChatContext(activeSpace(), message), language:'uk' });
+        return { ok:Boolean(result?.ok), answer:result?.answer || '', provider:result?.provider || '', reason:result?.reason || '' };
+      })()`);
+      if (!workspaceAiState.ok || workspaceAiState.answer.length < 20 || /(?:не нашлось достаточного ответа|недостаточно сведений|не знайшлося достатньої відповіді)/i.test(workspaceAiState.answer)) throw new Error(`ai_workspace_chat_failed:${JSON.stringify(workspaceAiState)}`);
+      console.log(`SLOY_AI_WORKSPACE_PROVIDER ${workspaceAiState.provider || 'unknown'} RELEVANT_ANSWER_READY`);
     }
     const rendererState = await overlay.webContents.executeJavaScript(`({
       ready: document.body.dataset.appReady === 'true',
@@ -1989,6 +1997,24 @@ ${safeMessage.trim()}`;
     })`);
     if (!rendererState.ready || rendererState.renderedCards !== rendererState.dataCards || rendererState.antischoolCards !== 20 || rendererState.antischoolLayout !== 'gallery' || rendererState.antischoolKnowledge < 4 || !rendererState.coachButton || !rendererState.recordButton || !rendererState.stopButton) {
       throw new Error(`renderer_not_initialized:${JSON.stringify(rendererState)}`);
+    }
+    const workspaceChatState = await overlay.webContents.executeJavaScript(`(() => {
+      const message = 'Коли людина каже, що вони вже навчаються у свого репетитора. Що далі?';
+      const space = activeSpace();
+      const ranked = rankWorkspaceEntries(space, message);
+      const context = buildSpaceChatContext(space, message);
+      const fallback = localSpaceChatAnswer(space, message);
+      const followup = localSpaceChatAnswer(space, 'Коли людина каже, що вони вже навчаються у свого репетитора.\\nЩо далі?');
+      return {
+        firstTitle:ranked[0]?.title || '',
+        contextLength:context.length,
+        contextHasScript:context.includes('Дуже круто, що розвиваєте англійську!'),
+        fallbackHasScript:Boolean(fallback?.text?.includes('Дуже круто, що розвиваєте англійську!')),
+        followupHasScript:Boolean(followup?.text?.includes('Дуже круто, що розвиваєте англійську!'))
+      };
+    })()`);
+    if (!workspaceChatState.firstTitle.includes('Вже займаюся') || workspaceChatState.contextLength > 65000 || !workspaceChatState.contextHasScript || !workspaceChatState.fallbackHasScript || !workspaceChatState.followupHasScript) {
+      throw new Error(`workspace_chat_relevance_failed:${JSON.stringify(workspaceChatState)}`);
     }
     const undoState = await overlay.webContents.executeJavaScript(`(() => {
       const before = cards.length;

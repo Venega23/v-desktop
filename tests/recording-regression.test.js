@@ -73,7 +73,10 @@ assert.match(html, /id="knowledge-image-input"/, 'Knowledge hub must accept imag
 assert.match(html, /id="space-chat-feed"[\s\S]{0,1200}id="space-chat-input"[\s\S]{0,500}id="space-chat-send"/, 'Each workspace must expose a persistent chat interface');
 assert.match(html, /data-space-prompt="[^"]*Создай карточки из всей информации пространства/, 'Workspace chat must expose an explicit all-information card command');
 assert.match(app, /function workspaceKnowledge/, 'Knowledge must be scoped to the active workspace');
-assert.match(app, /function getFullWorkspaceContext[\s\S]{0,2200}knowledge\.items[\s\S]{0,2200}space\.cards/, 'Workspace chat context must combine hub materials with every board card');
+assert.match(app, /function workspaceContextEntries[\s\S]{0,2600}knowledge\.items[\s\S]{0,2600}space\.cards/, 'Workspace chat context must combine hub materials with every board card');
+assert.match(app, /function rankWorkspaceEntries[\s\S]{0,2600}wantsSpokenReply[\s\S]{0,2600}score/, 'Workspace chat must rank conversational situations before calling an AI provider');
+assert.match(app, /function buildSpaceChatContext[\s\S]{0,2200}120000[\s\S]{0,2200}РЕЛЕВАНТНЫЕ МАТЕРИАЛЫ/, 'Workspace chat must send a compact relevance-ranked packet instead of the entire board');
+assert.match(app, /function localSpaceChatAnswer[\s\S]{0,1800}материалы пространства/, 'Relevant workspace material must remain usable when every AI provider is unavailable');
 assert.match(app, /function publishSpaceChatCards[\s\S]{0,1200}space\.cards\.unshift/, 'Workspace chat must be able to publish generated cards onto the current board');
 assert.match(app, /analyzeKnowledgeImage/, 'Pasted images must be analyzed instead of becoming unstructured clutter');
 assert.match(app, /ДОКАЗОВИЙ ПАКЕТ ІЗ БАЗИ ЗНАНЬ/, 'Live AI context must include the current workspace knowledge base');
@@ -264,7 +267,9 @@ assert.doesNotMatch(main, /function updateMeetingWindow[\s\S]{0,500}hideAnswerPo
 assert.match(main, /function showLatestAnswerPopup[\s\S]{0,500}showInactive\(\)[\s\S]{0,100}moveTop\(\)/, 'A held answer must be restored above other applications when the main overlay hides');
 assert.match(main, /answer_popup_not_held/, 'Desktop smoke testing must verify that meeting refreshes cannot remove the floating answer');
 assert.match(main, /finalized_meeting_controls_stale[\s\S]{0,500}finalized_meeting_window_not_closed/, 'Desktop smoke testing must verify that a completed meeting exposes a working close action');
+assert.match(main, /const workspaceChatState[\s\S]{0,1600}workspace_chat_relevance_failed/, 'Desktop smoke testing must verify the real objection script is ranked and available offline');
 assert.match(main, /ai_two_turn_pipeline_failed[\s\S]{0,300}SLOY_AI_SMOKE_PROVIDER[\s\S]{0,120}TWO_TURNS_READY/, 'The optional AI smoke test must prove that a second live turn replaces the first answer through the real provider router');
+assert.match(main, /ai_workspace_chat_failed[\s\S]{0,300}SLOY_AI_WORKSPACE_PROVIDER/, 'The optional AI smoke test must require a relevant real-provider workspace answer');
 assert.match(main, /uIOhook\.on\('keydown'[\s\S]{0,220}UiohookKey\.CapsLock[\s\S]{0,180}toggleAnswerSearchPause\(\)/, 'Caps Lock must globally toggle answer search pause without taking ownership of the key');
 assert.doesNotMatch(main, /globalShortcut\.register\('Capslock'/, 'Caps Lock must not be registered as an exclusive shortcut because that breaks normal letter casing');
 assert.match(launcher, /node_modules\\uiohook-napi\\package\.json/, 'The launcher must install the non-blocking Caps Lock observer when it is missing');
@@ -455,8 +460,9 @@ assert.match(main, /function extractGeminiKey[\s\S]{0,220}AIza[\s\S]{0,120}AQ\\\
 assert.match(main, /store\.geminiKeys[\s\S]{0,500}safeStorage\.encryptString/, 'Gemini credentials must only be persisted through protected storage');
 assert.match(main, /gateway\.ai\.cloudflare\.com[\s\S]{0,500}gemini-3\.1-flash-lite:generateContent[\s\S]{0,450}x-goog-api-key/, 'Gemini 3.1 Flash-Lite must use the configured Cloudflare gateway with Google key-header authentication');
 assert.match(main, /responseMimeType:'application\/json'[\s\S]{0,80}responseSchema:jsonSchema/, 'Gemini structured output must use the actual Gemini generationConfig schema fields');
-assert.match(main, /preferGemini:contextChars > 420000/, 'Very large workspace packets must use Gemini before providers with smaller context windows');
-assert.match(app, /slice\(0,900000\)/, 'Workspace chat must retain a substantially larger context packet when Gemini is configured');
+assert.match(main, /spaceChatContextChars: 160000/, 'Workspace chat IPC must reject accidentally oversized context packets');
+assert.match(main, /const initialContextChars = Math\.min\(120000[\s\S]{0,180}sendRequest\(30000\)/, 'Workspace chat must use a compact packet and a bounded retry after provider input limits');
+assert.doesNotMatch(app, /slice\(0,900000\)/, 'Workspace chat must never send the entire unranked board to a provider');
 assert.match(main, /handleTrusted\('space:chat'[\s\S]{0,5000}action="create_cards"[\s\S]{0,5000}schemaName:'space_chat'/, 'The protected workspace chat endpoint must distinguish answers from card-creation commands');
 assert.match(main, /completion\.reason === 'http_413'[\s\S]{0,260}buildUserPrompt\(4000\)/, 'Oversized live suggestions must retry with a much smaller evidence packet');
 assert.match(html, /id="ai-key-add-field"/, 'AI settings must let the user add multiple provider keys');

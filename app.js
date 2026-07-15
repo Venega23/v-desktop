@@ -863,28 +863,138 @@ function workspaceCardText(card) {
   return parts.filter(Boolean).join('\n\n').trim();
 }
 
-function getFullWorkspaceContext(space = activeSpace()) {
+const WORKSPACE_SEARCH_STOP_WORDS = new Set([
+  'а','або','без','был','была','были','быть','в','ваш','ваша','ваше','ви','він','вона','вони','все','всю','где','для','до','его','ее','её','и','из','их','как','когда','коли','который','ли','ми','мне','мой','мы','на','нам','наш','не','него','нее','ні','но','о','об','он','она','они','от','по','про','с','свой','свого','так','там','то','у','уже','що','это','я'
+]);
+
+const WORKSPACE_SEARCH_CONCEPTS = [
+  ['learning','навча','навчан','займа','обуча','учус','учит','занима'],
+  ['tutor','репетитор','викладач','преподават','учител'],
+  ['objection','запереч','возраж','відмов','отказ','каже','говорит','сказал','сказала'],
+  ['price','ціна','цен','дорог','вартіст','стоим'],
+  ['time','час','время','коли','когда','график','розклад','расписан'],
+  ['trial','пробн','тестов','демо','подар'],
+  ['result','результат','мета','цель','прогрес'],
+  ['next','далі','дальше','ответит','відповіст','сказат','сказать']
+];
+
+function normalizeWorkspaceSearchText(value = '') {
+  return String(value || '').toLocaleLowerCase('uk-UA')
+    .normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/ё/g, 'е').replace(/ґ/g, 'г').replace(/[’'`]/g, '')
+    .replace(/[^a-zа-яіїє0-9]+/gi, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function workspaceSearchTokens(value = '') {
+  const tokens = normalizeWorkspaceSearchText(value).split(' ').filter(token => token.length >= 3 && !WORKSPACE_SEARCH_STOP_WORDS.has(token));
+  const expanded = new Set(tokens);
+  for (const token of tokens) {
+    const concept = WORKSPACE_SEARCH_CONCEPTS.find(([, ...roots]) => roots.some(root => token.startsWith(root)));
+    if (concept) expanded.add(concept[0]);
+  }
+  return [...expanded];
+}
+
+function workspaceContextEntries(space = activeSpace()) {
   const knowledge = workspaceKnowledge(space);
-  const entries = [
-    ...knowledge.items.filter(item => item.status !== 'processing').map(item => ({
-      label:`Материал хаба · ${item.title || 'Без названия'}`,
-      text:[item.text, item.summary, ...(item.facts || [])].filter(Boolean).join('\n')
+  return [
+    ...knowledge.items.filter(item => item.status !== 'processing').map((item, index) => ({
+      id:item.id || `hub-${index}`, kind:'hub', label:`Материал хаба · ${item.title || 'Без названия'}`,
+      title:item.title || 'Без названия', text:[item.text, item.summary, ...(item.facts || [])].filter(Boolean).join('\n')
     })),
-    ...(space.cards || []).filter(card => !card.detachedMeeting).map(card => ({
-      label:`Карточка · ${[card.kicker, card.title].filter(Boolean).join(' · ') || 'Без названия'}`,
-      text:workspaceCardText(card)
+    ...(knowledge.playbook || []).map((item, index) => ({
+      id:`playbook-${index}`, kind:'playbook', label:`Готовый ответ · ${item.cue || 'Ситуация'}`,
+      title:item.cue || 'Готовый ответ', text:`Ситуация: ${item.cue || ''}\nОтвет: ${item.response || ''}`
+    })),
+    ...(space.cards || []).map((card, index) => ({
+      id:card.id || `card-${index}`, kind:'card', label:`Карточка · ${[card.kicker, card.title].filter(Boolean).join(' · ') || 'Без названия'}`,
+      title:[card.kicker, card.title].filter(Boolean).join(' · ') || 'Без названия', text:workspaceCardText(card)
     }))
-  ];
-  const perEntryLimit = Math.max(240, Math.min(40000, Math.floor(820000 / Math.max(1, entries.length))));
+  ].filter(entry => String(entry.text || '').trim());
+}
+
+function rankWorkspaceEntries(space = activeSpace(), query = '') {
+  const queryText = normalizeWorkspaceSearchText(query);
+  const queryTokens = workspaceSearchTokens(query);
+  const wantsSpokenReply = /(?:каже|говорит|сказал|сказала|запереч|возраж|що далі|что дальше|як відповісти|как ответить)/i.test(queryText);
+  return workspaceContextEntries(space).map((entry, index) => {
+    const titleText = normalizeWorkspaceSearchText(entry.title);
+    const bodyText = normalizeWorkspaceSearchText(entry.text);
+    const titleTokens = new Set(workspaceSearchTokens(entry.title));
+    const bodyTokens = new Set(workspaceSearchTokens(entry.text));
+    let score = 0;
+    for (const token of queryTokens) {
+      if (titleTokens.has(token)) score += 12;
+      else if (titleText.includes(token)) score += 7;
+      if (bodyTokens.has(token)) score += 4;
+      else if (bodyText.includes(token)) score += 2;
+    }
+    if (queryText.length >= 8 && titleText.includes(queryText)) score += 40;
+    if (wantsSpokenReply && /приєднання|уточнення|аргумент|заклик|сценар|готов(?:ый|а) ответ|відповідь/i.test(entry.text)) score += 16;
+    if (wantsSpokenReply && entry.kind === 'card') score += 10;
+    if (queryTokens.includes('tutor') && (titleTokens.has('learning') || bodyTokens.has('learning'))) score += 8;
+    if (queryTokens.includes('learning') && titleTokens.has('learning')) score += 12;
+    return { ...entry, score, index };
+  }).sort((left, right) => right.score - left.score || left.index - right.index);
+}
+
+function workspaceRelevantExcerpt(entry, query, limit) {
+  const text = String(entry?.text || '').trim();
+  if (text.length <= limit) return text;
+  const normalized = normalizeWorkspaceSearchText(text);
+  const positions = workspaceSearchTokens(query).map(token => normalized.indexOf(token)).filter(position => position >= 0);
+  const center = positions.length ? Math.min(...positions) : 0;
+  const start = Math.max(0, Math.min(text.length - limit, center - Math.floor(limit * 0.25)));
+  return `${start ? '…' : ''}${text.slice(start, start + limit)}${start + limit < text.length ? '…' : ''}`;
+}
+
+function isBroadWorkspaceRequest(message = '') {
+  return /(?:вс[еяю]\s+(?:информац|материал)|ус[ієї]\s+інформац|всі\s+матеріал|everything|entire\s+space|из\s+всего|з\s+усього)/i.test(message);
+}
+
+function isWorkspaceCardCommand(message = '') {
+  return /(?:создай|сделай|собери|разложи|вынеси|сложи|створи|зроби|збери|розклади|винеси).{0,40}(?:карточ|картк)/i.test(message);
+}
+
+function buildSpaceChatContext(space = activeSpace(), query = '') {
+  const knowledge = workspaceKnowledge(space);
+  const ranked = rankWorkspaceEntries(space, query);
+  const broad = isBroadWorkspaceRequest(query);
+  const relevant = broad ? ranked : ranked.filter(entry => entry.score > 0);
+  const selected = (relevant.length ? relevant : ranked).slice(0, broad ? 40 : 12);
+  const budget = broad ? 120000 : 65000;
+  const perEntryLimit = broad ? 4200 : 8500;
   const overview = [
     `Пространство: ${space.title}`,
-    knowledge.summary ? `Общая выжимка: ${knowledge.summary}` : '',
-    knowledge.facts?.length ? `Подтверждённые факты:\n${knowledge.facts.map(item => `• ${item}`).join('\n')}` : '',
-    knowledge.playbook?.length ? `Готовые ответы:\n${knowledge.playbook.map(item => `Вопрос/ситуация: ${item.cue}\nОтвет: ${item.response}`).join('\n\n')}` : '',
-    knowledge.tags?.length ? `Темы: ${knowledge.tags.join(', ')}` : ''
+    knowledge.summary ? `Общая выжимка: ${String(knowledge.summary).slice(0,5000)}` : '',
+    knowledge.facts?.length ? `Подтверждённые факты:\n${knowledge.facts.slice(0,40).map(item => `• ${item}`).join('\n').slice(0,7000)}` : '',
+    knowledge.tags?.length ? `Темы: ${knowledge.tags.slice(0,80).join(', ')}` : '',
+    `Отобрано материалов по смыслу: ${selected.length} из ${ranked.length}`
   ].filter(Boolean).join('\n\n');
-  const materials = entries.map((entry, index) => `[${index + 1}] ${entry.label}\n${String(entry.text || 'Текст отсутствует').slice(0,perEntryLimit)}`).join('\n\n');
-  return `${overview}\n\nВСЕ МАТЕРИАЛЫ ПРОСТРАНСТВА (${entries.length}):\n\n${materials}`.slice(0,900000);
+  let packet = `${overview}\n\nРЕЛЕВАНТНЫЕ МАТЕРИАЛЫ (сначала наиболее подходящие):`;
+  selected.forEach((entry, index) => {
+    const excerpt = workspaceRelevantExcerpt(entry, query, perEntryLimit);
+    const block = `\n\n[${index + 1}] ${entry.label}\n${excerpt}`;
+    if (packet.length + block.length <= budget) packet += block;
+  });
+  return packet.slice(0,budget);
+}
+
+function localSpaceChatAnswer(space, message) {
+  if (isWorkspaceCardCommand(message)) return null;
+  const best = rankWorkspaceEntries(space, message)[0];
+  if (!best || best.score < 12) return null;
+  const excerpt = workspaceRelevantExcerpt(best, message, 3200);
+  if (!excerpt) return null;
+  const ukrainian = /[іїєґ]|\b(?:що|коли|далі|людина|вони)\b/i.test(message);
+  return {
+    text:`${ukrainian ? 'У матеріалах є готова відповідь' : 'В материалах есть готовый ответ'} «${best.title}»:\n\n${excerpt}`,
+    provider:ukrainian ? 'матеріали простору' : 'материалы пространства'
+  };
+}
+
+function isWeakSpaceChatAnswer(answer = '') {
+  return /(?:не нашлось достаточного ответа|недостаточно (?:ответа|сведений|информации)|не знайшлося достатньої відповіді|недостатньо (?:відомостей|інформації))/i.test(answer);
 }
 
 function importMeetingToKnowledge(space, card) {
@@ -1051,7 +1161,9 @@ async function sendSpaceChatMessage(preset = '') {
   if (!message) return;
   const space = activeSpace();
   const knowledge = workspaceKnowledge(space);
-  const history = knowledge.chat.slice(-16).map(item => ({ role:item.role, text:item.text }));
+  const history = knowledge.chat.slice(-8).map(item => ({ role:item.role, text:item.text }));
+  const retrievalQuery = [...history.filter(item => item.role === 'user').slice(-2).map(item => item.text), message].join('\n');
+  const localAnswer = localSpaceChatAnswer(space, retrievalQuery);
   const userMessage = { id:crypto.randomUUID(), role:'user', text:message, createdAt:Date.now() };
   knowledge.chat.push(userMessage);
   knowledge.chat = knowledge.chat.slice(-80);
@@ -1062,15 +1174,16 @@ async function sendSpaceChatMessage(preset = '') {
   renderKnowledgeHub();
   try {
     const result = await window.sloy.spaceChat({
-      message, history, context:getFullWorkspaceContext(space),
+      message, history, context:buildSpaceChatContext(space, retrievalQuery),
       language:loadAiSettings().transcriptionLanguage || 'uk'
     });
     let created = [];
     if (result?.ok && result.action === 'create_cards') created = publishSpaceChatCards(space, result.cards, userMessage.id);
+    const useLocalAnswer = localAnswer && (!result?.ok || (result.action !== 'create_cards' && isWeakSpaceChatAnswer(result.answer)));
     knowledge.chat.push({
       id:crypto.randomUUID(), role:'assistant',
-      text:result?.ok ? result.answer : spaceChatErrorMessage(result?.reason),
-      provider:result?.ok ? result.provider || '' : '', createdCards:created.length, createdAt:Date.now()
+      text:useLocalAnswer ? localAnswer.text : (result?.ok ? result.answer : spaceChatErrorMessage(result?.reason)),
+      provider:useLocalAnswer ? localAnswer.provider : (result?.ok ? result.provider || '' : ''), createdCards:created.length, createdAt:Date.now()
     });
     knowledge.chat = knowledge.chat.slice(-80);
     persistWorkspaces();
@@ -1080,7 +1193,8 @@ async function sendSpaceChatMessage(preset = '') {
       showToast(`${created.length} карточек создано из материалов пространства`);
     }
   } catch {
-    knowledge.chat.push({ id:crypto.randomUUID(), role:'assistant', text:spaceChatErrorMessage('network'), createdAt:Date.now() });
+    const localAnswer = localSpaceChatAnswer(space, retrievalQuery);
+    knowledge.chat.push({ id:crypto.randomUUID(), role:'assistant', text:localAnswer?.text || spaceChatErrorMessage('network'), provider:localAnswer?.provider || '', createdAt:Date.now() });
     knowledge.chat = knowledge.chat.slice(-80);
     persistWorkspaces();
   } finally {
