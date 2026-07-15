@@ -655,11 +655,12 @@ function showStartupError(error) {
 
 const isAiSmokeTest = process.argv.includes('--ai-smoke-test');
 const isSmokeTest = process.argv.includes('--smoke-test') || isAiSmokeTest;
-if (isSmokeTest) {
+const isUpdateSmokeTest = process.argv.includes('--update-smoke-test');
+if (isSmokeTest || isUpdateSmokeTest) {
   app.disableHardwareAcceleration();
-  app.setPath('userData', path.join(app.getPath('temp'), 'sloy-memory-overlay-smoke'));
+  app.setPath('userData', path.join(app.getPath('temp'), isUpdateSmokeTest ? 'sloy-memory-overlay-update-smoke' : 'sloy-memory-overlay-smoke'));
 }
-const hasSingleInstanceLock = isSmokeTest || app.requestSingleInstanceLock();
+const hasSingleInstanceLock = isSmokeTest || isUpdateSmokeTest || app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) app.quit();
 
 function cancelHideTimer() {
@@ -1042,8 +1043,8 @@ app.whenReady().then(async () => {
   }).initialize();
   await initializeAutoStart();
   if (!isSmokeTest) createTray();
-  updateManager.startBackgroundChecks();
-  if (!launchedAtLogin) showOverlay();
+  if (!isUpdateSmokeTest) updateManager.startBackgroundChecks();
+  if (!launchedAtLogin && !isUpdateSmokeTest) showOverlay();
   const registered = isSmokeTest || globalShortcut.register('Control+Alt+Space', toggleOverlay);
   if (!registered) {
     console.warn('Global shortcut Ctrl+Alt+Space is unavailable');
@@ -1916,6 +1917,29 @@ ${safeMessage.trim()}`;
   });
 
   await startRendererLoad();
+  if (isUpdateSmokeTest) {
+    await updateManager.check({ manual:false, force:true });
+    const deadline = Date.now() + 6 * 60 * 1000;
+    while (!['ready','completed','error'].includes(updateManager.state.stage) && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+    const result = {
+      ok:updateManager.state.stage === 'ready',
+      stage:updateManager.state.stage,
+      installedVersion:updateManager.state.installedVersion,
+      targetVersion:updateManager.state.targetVersion,
+      filesCompleted:updateManager.state.filesCompleted,
+      filesTotal:updateManager.state.filesTotal,
+      total:updateManager.state.total,
+      errorCode:updateManager.state.errorCode || ''
+    };
+    await fs.mkdir(app.getPath('userData'), { recursive:true });
+    await fs.writeFile(path.join(app.getPath('userData'), 'update-smoke-result.json'), JSON.stringify(result, null, 2), 'utf8');
+    console.log(`V_UPDATE_SMOKE ${JSON.stringify(result)}`);
+    isQuitting = true;
+    app.exit(result.ok ? 0 : 1);
+    return;
+  }
   if (isSmokeTest) {
     if (isAiSmokeTest) {
       const aiState = await overlay.webContents.executeJavaScript(`(async () => {
@@ -1975,6 +1999,17 @@ ${safeMessage.trim()}`;
       return { removed, restored };
     })()`);
     if (!undoState.removed || !undoState.restored) throw new Error(`card_undo_failed:${JSON.stringify(undoState)}`);
+    await overlay.webContents.executeJavaScript(`(() => {
+      cards.push({ id:'startup-detached-meeting', createdAt:Date.now(), type:'transcript', title:'Saved meeting', meetingVersion:1, meetingState:'finalized', detachedMeeting:true, segments:[] });
+      render();
+    })()`);
+    await new Promise(resolve => setTimeout(resolve, 80));
+    if (meetingWindow.isVisible()) throw new Error('saved_detached_meeting_opened_on_startup');
+    await overlay.webContents.executeJavaScript(`(() => {
+      const index = cards.findIndex(card => card.id === 'startup-detached-meeting');
+      if (index >= 0) cards.splice(index, 1);
+      render();
+    })()`);
     updateMeetingWindow({ cardId:'smoke-meeting', title:'Smoke meeting', state:'active', duration:'00:01', processing:'', transcript:'Test', summary:'Ready', keyPoints:['One'], topics:[], decisions:[], tasks:[], questions:[], playbook:[], suggestion:'', suggestedFor:'' });
     await new Promise(resolve => setTimeout(resolve, 100));
     const detachedState = await meetingWindow.webContents.executeJavaScript(`({ title:document.querySelector('#title')?.textContent, tabs:document.querySelectorAll('[data-tab]').length })`);
@@ -2019,7 +2054,7 @@ ${safeMessage.trim()}`;
     app.quit();
     return;
   }
-  if (!launchedAtLogin) showOverlay();
+  if (!launchedAtLogin && !isUpdateSmokeTest) showOverlay();
 }).catch(error => {
   console.error('[startup-failed]', error);
   if (isSmokeTest) {

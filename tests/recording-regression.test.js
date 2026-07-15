@@ -256,6 +256,8 @@ assert.match(css, /\.freeform-board \{[\s\S]{0,180}overflow: hidden/, 'The board
 assert.doesNotMatch(html, /board-pages|board-next-free/, 'The fixed board must not expose invented pagination or continuation controls');
 assert.match(app, /function findMeetingBoardPlacement/, 'Recording startup must check whether its meeting hub fits on the fixed board');
 assert.match(app, /else card\.detachedMeeting = true/, 'A meeting hub without board space must detach into its own window');
+assert.match(app, /const detachedToSync = detachedMeetings\.find\(card => card\.id === recordingSession\?\.card\?\.id\)/, 'A detached meeting window must only be restored by its live recording session');
+assert.doesNotMatch(app, /detachedMeetings\.at\(-1\)/, 'A saved detached meeting must not reopen automatically during application startup');
 assert.match(main, /async function createMeetingWindow/, 'The desktop process must create the separate always-on-top meeting window');
 assert.match(main, /Перезапустить V[\s\S]{0,120}restartApplication/, 'The tray must provide a real process restart instead of merely hiding and reopening the stale instance');
 assert.doesNotMatch(main, /function updateMeetingWindow[\s\S]{0,500}hideAnswerPopup\(\)/, 'Meeting refreshes must not erase the floating answer window');

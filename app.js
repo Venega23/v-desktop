@@ -1438,10 +1438,10 @@ function render() {
   bindCardEvents();
   updateSelectionBar();
   filterCards(search.value);
+  // A saved detached meeting must not reopen merely because the application rendered.
+  // The separate window is opened only by the recording session that currently owns it.
   const detachedMeetings = cards.filter(card => card.detachedMeeting && card.type === 'transcript');
-  const detachedToSync = detachedMeetings.find(card => card.id === recordingSession?.card?.id)
-    || detachedMeetings.find(card => card.id === activeSpace().activeMeetingId)
-    || detachedMeetings.at(-1);
+  const detachedToSync = detachedMeetings.find(card => card.id === recordingSession?.card?.id);
   if (detachedToSync) syncDetachedMeetingWindow(detachedToSync);
 }
 
