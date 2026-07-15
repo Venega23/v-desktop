@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light dark">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: file:; media-src 'self' blob: file:; connect-src 'self'; object-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Слой</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="ambient ambient-one"></div>
+  <div class="ambient ambient-two"></div>
+  <div class="noise"></div>
+
+  <main class="shell" aria-label="Слой — панель быстрых знаний">
+    <aside class="rail" aria-label="Пространства">
+      <div class="side-brand"><button class="brand" aria-label="VVVV, главная"><span class="brand-mark">V</span></button><span>VVVV</span></div>
+      <div class="workspace-identity">
+        <span class="workspace-glyph">НР</span>
+        <h1 contenteditable="true" spellcheck="false" id="workspace-title">Новая работа</h1>
+        <button class="workspace-chevron" aria-label="Выбрать пространство">⌄</button>
+      </div>
+      <nav class="space-list">
+        <button class="space active" data-space="work" aria-label="Новая работа"><span>НР</span><em>Новая работа</em></button>
+        <button class="space" data-space="personal" aria-label="Личное"><span>Л</span><em>Личное</em></button>
+        <button class="space add-space" aria-label="Добавить пространство"><span>+</span><em>Добавить</em></button>
+      </nav>
+      <div class="side-tools">
+        <button class="primary-add" id="primary-add" title="Добавить"><span>+</span><em>Добавить</em></button>
+        <button class="knowledge-button" id="knowledge-toggle" title="Чат и материалы пространства"><span>✦</span><em>Пространство AI</em><b id="knowledge-count">0</b></button>
+        <button class="sort-number-button" id="sort-number-button" title="Расставить карточки по номерам"><span>1↕</span><em>По номерам</em></button>
+        <button class="coach-button" id="coach-button" title="Распознаёт речь и подсказывает ответы, но не записывает аудио"><span>✦</span><em>AI-помощник</em></button>
+        <button class="record-button" id="record-button" aria-label="Включить запись разговора"><span>●</span><em>Включить запись</em></button>
+        <label class="search-wrap"><span>⌕</span><input id="search" type="search" placeholder="Поиск" autocomplete="off"><kbd>K</kbd></label>
+        <div class="side-mode"><button class="view-toggle active" data-view="view" title="Обзор"><span>◉</span><em>Обзор</em></button><button class="view-toggle" data-view="edit" title="Править"><span>✎</span><em>Править</em></button></div>
+      </div>
+      <div class="rail-footer">
+        <button class="rail-action privacy-toggle" aria-label="Скрыть содержимое" title="Режим приватности">&#9673;</button>
+        <button class="rail-action" id="ai-settings-toggle" aria-label="Настройки AI" title="AI-провайдеры и распознавание речи">&#10022;</button>
+        <button class="rail-action" id="font-toggle" aria-label="Шрифт" title="Выбрать шрифт" style="font-size:13px;font-weight:700">Aa</button>
+        <button class="rail-action close-overlay" aria-label="Закрыть">&times;</button>
+      </div>
+      <div class="rail-resize-handle" id="rail-resize" role="separator" aria-label="Изменить ширину боковой панели" aria-orientation="vertical" aria-valuemin="64" aria-valuemax="520" aria-valuenow="215" tabindex="0" title="Потяните для изменения ширины · двойной клик для сброса"></div>
+    </aside>
+
+    <section class="workspace">
+      <header class="workspace-viewbar" aria-label="Вид пространства" hidden>
+        <div class="layout-controls" role="group" aria-label="Режим отображения">
+          <button class="layout-button active" type="button" data-layout="dashboard" aria-pressed="true" title="Свободная доска"><span>⌗</span><em>Доска</em></button>
+          <button class="layout-button" type="button" data-layout="gallery" aria-pressed="false" title="Галерея карточек"><span>▦</span><em>Галерея</em></button>
+          <button class="layout-button" type="button" data-layout="list" aria-pressed="false" title="Список карточек"><span>☷</span><em>Список</em></button>
+        </div>
+        <label class="sort-control" for="sort-cards"><span>Сортировка</span>
+          <select id="sort-cards" aria-label="Сортировка карточек">
+            <option value="manual">Вручную</option>
+            <option value="newest">Сначала новые</option>
+            <option value="title">По названию</option>
+            <option value="number">По номеру</option>
+          </select>
+        </label>
+      </header>
+      <section class="board" id="board" aria-live="polite"></section>
+
+      <div class="empty-search" id="empty-search" hidden>
+        <span>⌕</span>
+        <h2>Ничего не найдено</h2>
+        <p>Попробуйте другое слово или очистите поиск.</p>
+      </div>
+    </section>
+  </main>
+
+  <div class="add-menu" id="add-menu" hidden>
+    <button data-type="text"><span>≡</span><div><strong>Текст</strong><small>Заметка или инструкция</small></div></button>
+    <button data-type="checklist"><span>✓</span><div><strong>Чек-лист</strong><small>Шаги и задачи</small></div></button>
+    <button data-type="link"><span>↗</span><div><strong>Ссылка</strong><small>Быстрый переход</small></div></button>
+    <button data-type="image"><span>▧</span><div><strong>Изображение</strong><small>Скриншот или схема</small></div></button>
+  </div>
+  <input id="image-input" type="file" accept="image/*" hidden>
+  <div class="record-panel" id="record-panel" hidden>
+    <div class="record-panel-drag" id="record-panel-drag" role="button" tabindex="0" aria-label="Переместить панель помощника" title="Перетащите панель · двойной щелчок вернёт её вниз"><span></span></div>
+    <div class="live-outline-panel" id="live-outline-panel" hidden><strong>Важное сейчас</strong><div id="live-outline">Начну собирать конспект, когда появится речь.</div></div>
+    <div class="live-coach" id="live-coach" hidden><strong>AI · варианты ответа</strong><p id="live-suggestion">Анализирую вопрос…</p></div>
+    <div class="record-pulse"><i></i></div>
+    <div class="record-copy">
+      <strong id="record-status">Слушаю разговор</strong>
+      <span id="record-transcript">Речь появится здесь…</span>
+      <div class="record-sources"><i class="active">Микрофон · включён</i><button id="record-source-system" type="button" aria-pressed="false">Компьютер · выключен</button><label id="record-speaker-role" hidden><span>Мой голос</span><select id="record-user-speaker" aria-label="Выберите свой голос"><option value="">Авто</option></select></label></div>
+    </div>
+    <button id="answer-pause" type="button" aria-pressed="false" title="Заморозить текущий ответ и не искать следующий">Заморозить · Caps Lock</button>
+    <time id="record-time">00:00</time>
+    <button id="record-mark" title="Отметить важный момент">★</button>
+    <button id="record-stop">Пауза</button>
+    <button id="record-finish">Завершить встречу</button>
+  </div>
+  <div class="selection-bar" id="selection-bar" hidden>
+    <strong><span id="selection-count">0</span> выбрано</strong>
+    <i></i>
+    <span>Размер группы</span>
+    <button data-group-size="small" title="Компактный">S</button>
+    <button data-group-size="medium" title="Обычный">M</button>
+    <button data-group-size="wide" title="Широкий">W</button>
+    <button data-group-size="large" title="Большой">L</button>
+    <i></i>
+    <span>Расположить</span>
+    <button data-arrange="row" title="В ряд">↔</button>
+    <button data-arrange="column" title="В колонку">↕</button>
+    <button data-arrange="grid" title="Компактной группой">▦</button>
+    <i></i>
+    <button id="selection-clear">Снять</button>
+  </div>
+
+  <dialog class="space-dialog" id="space-dialog">
+    <form method="dialog" id="space-form">
+      <span class="dialog-icon">＋</span>
+      <h2>Новое пространство</h2>
+      <p>Отдельное место для работы, проекта или личных материалов.</p>
+      <label>Название<input id="space-name" maxlength="32" placeholder="Например, Новый проект" required></label>
+      <div class="dialog-actions"><button value="cancel" formnovalidate>Отмена</button><button class="dialog-primary" value="create" id="space-create">Создать</button></div>
+    </form>
+  </dialog>
+  <dialog class="space-dialog link-dialog" id="link-dialog">
+    <form method="dialog" id="link-form">
+      <span class="dialog-icon">↗</span>
+      <h2 id="link-dialog-title">Новая ссылка</h2>
+      <p>Добавьте понятное название и адрес. Протокол можно не указывать — приложение подставит HTTPS.</p>
+      <label>Название<input id="link-label" maxlength="80" autocomplete="off" placeholder="Документация" required></label>
+      <label>Адрес<input id="link-url" type="text" inputmode="url" autocomplete="url" placeholder="site.com/page" required></label>
+      <div class="dialog-actions"><button value="cancel" formnovalidate>Отмена</button><button class="dialog-primary" value="save">Сохранить</button></div>
+    </form>
+  </dialog>
+  <dialog class="space-dialog recording-preflight-dialog" id="recording-preflight-dialog">
+    <form method="dialog" id="recording-preflight-form">
+      <span class="dialog-icon">●</span>
+      <h2>Перед первой записью</h2>
+      <p>Слой сохранит аудио локально. Windows отдельно запросит доступ к микрофону и, если включено, к звуку компьютера.</p>
+      <label class="preflight-option"><input id="recording-system-audio" type="checkbox"><span><strong>Записывать звук компьютера</strong><small>Понадобится выбрать экран в системном окне Chromium.</small></span></label>
+      <label class="preflight-option consent"><input id="recording-participant-consent" type="checkbox" required><span><strong>Согласие получено</strong><small>Я предупредил участников разговора о записи.</small></span></label>
+      <div class="dialog-actions"><button value="cancel" formnovalidate>Отмена</button><button class="dialog-primary" value="continue">Продолжить</button></div>
+    </form>
+  </dialog>
+  <dialog class="image-dialog" id="image-dialog">
+    <form method="dialog" id="image-form">
+      <div class="image-dialog-preview"><img id="image-dialog-preview" alt="Предпросмотр изображения"></div>
+      <div class="image-dialog-content">
+        <span class="dialog-eyebrow">ИЗОБРАЖЕНИЕ</span>
+        <h2>Настройка карточки</h2>
+        <label>Название<input id="image-title" maxlength="80"></label>
+        <label>Ссылка при нажатии<input id="image-link" type="url" placeholder="https://example.com"></label>
+        <label>Отображение<select id="image-fit"><option value="cover">Заполнять карточку</option><option value="contain">Показывать целиком</option></select></label>
+        <p class="image-link-hint">Если добавить ссылку, в режиме просмотра изображение будет открывать её в браузере.</p>
+        <div class="dialog-actions"><button value="cancel">Отмена</button><button class="dialog-primary" value="save">Сохранить</button></div>
+      </div>
+    </form>
+  </dialog>
+  <dialog class="space-dialog ai-settings-dialog" id="ai-settings-dialog">
+    <form method="dialog" id="ai-settings-form">
+      <span class="dialog-icon">&#10022;</span>
+      <h2>AI для пространства и встреч</h2>
+      <p>Azure Speech ведёт живую расшифровку, а Cerebras, xAI, Gemini или Groq готовят конспект и подсказки.</p>
+      <div class="ai-key-status" id="ai-key-status">Проверяю подключение…</div>
+      <label>Ключ Azure Speech<input id="azure-speech-key" type="password" autocomplete="off" placeholder="KEY 1 из Azure · не сохраняется в интерфейсе"></label>
+      <label>Регион Azure Speech<input id="azure-speech-region" type="text" autocomplete="off" value="swedencentral" placeholder="swedencentral"></label>
+      <div class="ai-provider-keys">
+        <div class="ai-provider-keys-head"><strong>Ключи для ответов</strong><span>Cerebras, xAI, Gemini или Groq · переключение автоматическое</span></div>
+        <div class="ai-key-list" id="ai-key-list"></div>
+        <div class="ai-key-inputs" id="ai-key-inputs">
+          <div class="ai-key-input-row"><input class="ai-api-key" id="xai-api-key" type="password" autocomplete="off" placeholder="csk-…, xai-…, AQ.… / AIza… или gsk_…"><button type="button" class="ai-key-input-remove" aria-label="Убрать поле" hidden>×</button></div>
+        </div>
+        <button class="ai-key-add-field" type="button" id="ai-key-add-field">+ Добавить ещё ключ</button>
+      </div>
+      <label>Язык разговора<select id="transcription-language"><option value="uk">Українська</option><option value="ru">Русский</option><option value="en">English</option></select></label>
+      <label class="setting-check"><input id="capture-system-audio" type="checkbox"><span>Подключать звук компьютера для записи и AI-помощника</span></label>
+      <label class="setting-check"><input id="xai-auto-transcribe" type="checkbox" checked><span>Расшифровывать запись автоматически</span></label>
+      <label class="setting-check"><input id="xai-live-transcription" type="checkbox" checked><span>Показывать расшифровку во время разговора</span></label>
+      <label class="setting-check"><input id="xai-live-suggestions" type="checkbox" checked><span>Предлагать варианты ответа во время разговора</span></label>
+      <label class="setting-check"><input id="xai-internet-search" type="checkbox"><span>Разрешить AI-помощнику искать актуальные ответы в интернете через Gemini или Grok</span></label>
+      <label class="setting-check"><input id="xai-auto-structure" type="checkbox" checked><span>Создавать выжимку, решения и задачи</span></label>
+      <p class="settings-note">Интернет-поиск выключен по умолчанию и может расходовать отдельный лимит поисковых инструментов Gemini или Grok. Без него помощник использует материалы пространства и знания подключённой модели. Azure используется для потокового текста с раздельных дорожек микрофона и компьютера.</p>
+      <div class="dialog-actions"><button type="button" id="azure-key-clear">Удалить Azure</button><button type="button" id="xai-key-clear">Удалить все AI-ключи</button><button value="cancel">Отмена</button><button class="dialog-primary" value="save">Сохранить</button></div>
+    </form>
+  </dialog>
+  <dialog class="knowledge-dialog" id="knowledge-dialog">
+    <form method="dialog" id="knowledge-form">
+      <header><div><span class="dialog-eyebrow">ЧАТ И КОНТЕКСТ ПРОСТРАНСТВА</span><h2 id="knowledge-title">Пространство AI</h2></div><button value="cancel" aria-label="Закрыть">×</button></header>
+      <nav class="knowledge-tabs" aria-label="Раздел пространства">
+        <button type="button" class="active" data-knowledge-tab="chat">✦ Чат</button>
+        <button type="button" data-knowledge-tab="materials">◆ Материалы <b id="knowledge-tab-count">0</b></button>
+      </nav>
+      <section class="space-chat-panel" id="space-chat-panel">
+        <div class="space-chat-feed" id="space-chat-feed" aria-live="polite"></div>
+        <div class="space-chat-suggestions" id="space-chat-suggestions">
+          <button type="button" data-space-prompt="Расскажи кратко, какая информация есть в этом пространстве.">Что здесь есть?</button>
+          <button type="button" data-space-prompt="Создай карточки из всей информации пространства. Охвати все содержательные темы без повторов.">Карточки из всего</button>
+          <button type="button" data-space-prompt="Выбери самое важное из всей информации пространства и создай отдельные карточки.">Карточки: главное</button>
+        </div>
+        <div class="space-chat-compose">
+          <textarea id="space-chat-input" rows="3" maxlength="6000" placeholder="Спросите о пространстве или скажите, какие карточки создать…"></textarea>
+          <button type="button" class="dialog-primary" id="space-chat-send">Отправить</button>
+        </div>
+      </section>
+      <section class="knowledge-materials-panel" id="knowledge-materials-panel" hidden>
+        <div class="knowledge-summary" id="knowledge-summary">Добавьте инструкции, факты, термины или изображения — помощник будет учитывать их только в этом пространстве.</div>
+        <div class="knowledge-feed" id="knowledge-feed"></div>
+        <div class="knowledge-compose">
+          <textarea id="knowledge-input" rows="3" placeholder="Вставьте текст или инструкцию. Изображение можно вставить через Ctrl+V."></textarea>
+          <input id="knowledge-image-input" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
+          <div><button type="button" id="knowledge-image">＋ Изображение</button><button type="button" id="knowledge-send" class="dialog-primary">Добавить в базу</button></div>
+        </div>
+      </section>
+    </form>
+  </dialog>
+  <div class="font-panel" id="font-panel" hidden>
+    <div class="font-panel-header">
+      <span class="font-panel-title">Тема і шрифт</span>
+      <button class="font-panel-close" id="font-panel-close" aria-label="Закрити">&times;</button>
+    </div>
+    <div class="theme-chip">
+      <button class="theme-btn active" id="theme-dark" title="Тёмная">&#9790; Тёмная</button>
+      <button class="theme-btn" id="theme-light" title="Светлая">&#9788; Светлая</button>
+    </div>
+    <div class="font-panel-title" style="padding: 4px 8px 2px">Шрифт</div>
+    <button class="font-option active" data-font="default"><span class="font-option-preview" style="font-family:Segoe UI">Aa</span>Segoe UI</button>
+    <button class="font-option" data-font="Inter"><span class="font-option-preview" style="font-family:Inter">Aa</span>Inter</button>
+    <button class="font-option" data-font="Roboto"><span class="font-option-preview" style="font-family:Roboto">Aa</span>Roboto</button>
+    <button class="font-option" data-font="Montserrat"><span class="font-option-preview" style="font-family:Montserrat">Aa</span>Montserrat</button>
+    <button class="font-option" data-font="Comfortaa"><span class="font-option-preview" style="font-family:Comfortaa">Aa</span>Comfortaa</button>
+    <button class="font-option" data-font="Georgia"><span class="font-option-preview" style="font-family:Georgia">Aa</span>Georgia</button>
+    <button class="font-option" data-font="JetBrains"><span class="font-option-preview" style="font-family:JetBrains Mono">Aa</span>JetBrains Mono</button>
+  </div>
+  <div class="rich-text-toolbar" id="rich-text-toolbar" hidden role="toolbar" aria-label="Форматирование выделенного текста">
+    <button type="button" data-rich-command="bold" title="Жирный"><b>B</b></button>
+    <button type="button" data-rich-command="italic" title="Курсив"><i>I</i></button>
+    <button type="button" data-rich-command="underline" title="Подчёркивание"><u>U</u></button>
+    <button type="button" data-rich-command="strikeThrough" title="Зачёркивание"><s>S</s></button>
+    <i></i>
+    <input id="rich-font-name" list="rich-font-list" placeholder="Шрифт" title="Название шрифта">
+    <datalist id="rich-font-list"><option value="Segoe UI"><option value="Inter"><option value="Georgia"><option value="Comfortaa"><option value="Arial"><option value="Times New Roman"><option value="JetBrains Mono"></datalist>
+    <select id="rich-font-size" title="Размер"><option value="2">Мелкий</option><option value="3" selected>Обычный</option><option value="4">Крупный</option><option value="5">Заголовок</option></select>
+    <input id="rich-text-color" type="color" value="#334155" title="Цвет текста">
+    <input id="rich-highlight-color" type="color" value="#fff0a8" title="Цвет выделения">
+    <button type="button" data-rich-command="insertUnorderedList" title="Список">•≡</button>
+    <button type="button" data-rich-block="blockquote" title="Выделенный блок">▣</button>
+    <select id="rich-emoji" title="Добавить значок"><option value="">☺</option><option>✅</option><option>💡</option><option>🎯</option><option>⚠️</option><option>📌</option><option>❓</option><option>⭐</option></select>
+    <button type="button" data-rich-command="removeFormat" title="Очистить форматирование">Tx</button>
+  </div>
+  <div class="toast" id="toast" role="status"></div>
+
+  <script src="antischool-content.js"></script>
+  <script src="recording-runtime.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

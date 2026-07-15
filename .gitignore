@@ -1,0 +1,15 @@
+node_modules/
+dist/
+out/
+release/
+*.log
+*.tmp
+.env
+.env.*
+!.env.example
+secrets.json
+preferences.json
+recordings/
+assets/
+.DS_Store
+Thumbs.db

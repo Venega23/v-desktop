@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:">
+  <title>Обновление V</title>
+  <link rel="stylesheet" href="updater.css">
+</head>
+<body>
+  <header class="window-bar">
+    <div class="window-brand"><span>V</span><strong>Обновление V</strong></div>
+    <button id="update-close" type="button" aria-label="Скрыть окно">×</button>
+  </header>
+  <main>
+    <section class="update-summary">
+      <span class="update-badge" id="update-badge">ОБНОВЛЕНИЕ</span>
+      <h1 id="update-title">Проверяем обновления</h1>
+      <p id="update-description">Связываемся с GitHub Releases и сравниваем версии.</p>
+      <div class="progress-head"><span>Общий прогресс</span><strong id="update-percent">0%</strong></div>
+      <div class="progress-track" id="update-progress" role="progressbar" aria-label="Общий прогресс" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="update-progress-fill"></i></div>
+    </section>
+
+    <ol class="update-steps" aria-label="Этапы обновления">
+      <li data-update-step="checking"><i>1</i><span>Проверка</span></li>
+      <li data-update-step="files"><i>2</i><span>Список файлов</span></li>
+      <li data-update-step="downloading"><i>3</i><span>Скачивание</span></li>
+      <li data-update-step="verifying"><i>4</i><span>Проверка файлов</span></li>
+      <li data-update-step="ready"><i>5</i><span>Установка</span></li>
+      <li data-update-step="restarting"><i>6</i><span>Перезапуск</span></li>
+    </ol>
+
+    <section class="update-details">
+      <div><span>Файлы</span><strong id="update-files">Уточняется</strong></div>
+      <div><span>Объём</span><strong id="update-size">Уточняется</strong></div>
+      <div><span>Скорость</span><strong id="update-speed">—</strong></div>
+      <div><span>Осталось</span><strong id="update-eta">—</strong></div>
+      <div class="current-file"><span>Текущий файл</span><strong id="update-current-file">—</strong></div>
+    </section>
+  </main>
+  <footer>
+    <span id="update-version">Текущая версия: V —</span>
+    <div>
+      <button class="secondary" id="update-log" type="button" hidden>Открыть журнал</button>
+      <button class="secondary" id="update-retry" type="button" hidden>Повторить</button>
+      <button class="primary" id="update-install" type="button" hidden>Перезапустить и установить</button>
+    </div>
+  </footer>
+  <script src="updater.js"></script>
+</body>
+</html>

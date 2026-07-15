@@ -1,0 +1,100 @@
+{
+  "name": "sloy-memory-overlay",
+  "version": "0.2.0",
+  "description": "A calm fullscreen knowledge overlay for Windows",
+  "author": {
+    "name": "Sloy"
+  },
+  "copyright": "Copyright © 2026 Sloy",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "test": "node tests/recording-regression.test.js && node --test tests/recording-runtime.test.js tests/update-manager.test.js",
+    "test:smoke": "electron . --smoke-test",
+    "test:ai-smoke": "electron . --ai-smoke-test",
+    "test:ai-smoke:stored": "electron scripts/ai-smoke-stored.js",
+    "test:gemini-web:stored": "electron scripts/gemini-web-smoke-stored.js",
+    "diagnose:ai": "electron scripts/diagnose-ai.js",
+    "diagnose:cerebras": "electron scripts/diagnose-ai.js --cerebras-only",
+    "diagnose:gemini": "electron scripts/diagnose-ai.js --gemini-only",
+    "restore:cerebras": "electron scripts/restore-cerebras-key.js",
+    "prune:ai-keys": "electron scripts/prune-ai-keys.js",
+    "check": "node --check main.js && node --check preload.js && node --check update-manager.js && node --check update-preload.js && node --check updater.js && node --check recording-runtime.js && node --check antischool-content.js && node --check app.js && node --check answer.js && node --check meeting.js && node --check debug.js && node --check scripts/diagnose-ai.js && node --check scripts/ai-smoke-stored.js && node --check scripts/gemini-web-smoke-stored.js && node --check scripts/restore-cerebras-key.js && node --check scripts/prune-ai-keys.js && npm test",
+    "pack": "electron-builder --dir --win",
+    "build:win": "electron-builder --win --x64"
+  },
+  "devDependencies": {
+    "electron": "^43.1.0",
+    "electron-builder": "^26.15.3"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9",
+    "ffmpeg-static": "^5.3.0",
+    "microsoft-cognitiveservices-speech-sdk": "^1.50.0",
+    "uiohook-napi": "^1.5.5",
+    "ws": "^8.21.0"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
+  },
+  "build": {
+    "appId": "com.sloy.overlay",
+    "productName": "V",
+    "asar": true,
+    "npmRebuild": false,
+    "buildDependenciesFromSource": false,
+    "asarUnpack": [
+      "node_modules/ffmpeg-static/**"
+    ],
+    "files": [
+      "main.js",
+      "preload.js",
+      "recording-runtime.js",
+      "app.js",
+      "antischool-content.js",
+      "answer.html",
+      "answer.js",
+      "meeting.html",
+      "meeting.js",
+      "update-manager.js",
+      "update-preload.js",
+      "updater.html",
+      "updater.js",
+      "updater.css",
+      "index.html",
+      "styles.css",
+      "build/icon.png",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Venega23",
+        "repo": "v-desktop",
+        "releaseType": "release"
+      }
+    ],
+    "win": {
+      "icon": "build/icon.png",
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "artifactName": "V-Setup-${version}-${arch}.${ext}",
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "V"
+    },
+    "portable": {
+      "artifactName": "V.${ext}"
+    }
+  }
+}
