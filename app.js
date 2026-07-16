@@ -403,9 +403,14 @@ const knowledgeInput = document.getElementById('knowledge-input');
 const knowledgeImageInput = document.getElementById('knowledge-image-input');
 const spaceChatFeed = document.getElementById('space-chat-feed');
 const spaceChatInput = document.getElementById('space-chat-input');
+const spaceChatPanel = document.getElementById('space-chat-panel');
+const spaceChatScaleValue = document.getElementById('space-chat-scale-value');
+const spaceChatVerbosity = document.getElementById('space-chat-verbosity');
 let knowledgeHubTab = 'chat';
 let spaceChatBusy = false;
 let spaceChatBusySpaceId = '';
+let spaceChatUiSaveTimer = null;
+let spaceChatWheelDelta = 0;
 const recordingPreflightDialog = document.getElementById('recording-preflight-dialog');
 let recordingPreflightPromise = null;
 let resolveRecordingPreflight = null;
@@ -803,12 +808,115 @@ function loadWorkspaces() {
   return normalizeWorkspaces(initial);
 }
 
+const CHAT_FORMAT_FONTS = new Set(['segoe','inter','roboto','montserrat','comfortaa','georgia','arial','times','jetbrains']);
+const CHAT_FORMAT_SIZES = new Set(['sm','md','lg','xl']);
+
+function normalizeSpaceChatPreferences(value = {}) {
+  const verbosity = ['short','balanced','detailed'].includes(value?.verbosity) ? value.verbosity : 'balanced';
+  const format = ['auto','paragraphs','bullets'].includes(value?.format) ? value.format : 'auto';
+  const language = ['auto','ru','uk','en'].includes(value?.language) ? value.language : 'auto';
+  const requestedScale = Number(value?.textScale);
+  const textScale = Number.isFinite(requestedScale) ? Math.max(80, Math.min(200, Math.round(requestedScale / 10) * 10)) : 100;
+  return { verbosity, format, language, textScale };
+}
+
+function normalizeChatFormats(formats, textLength = 0) {
+  const length = Math.max(0, Number(textLength) || 0);
+  return (Array.isArray(formats) ? formats : []).slice(-200).map(entry => {
+    const start = Math.max(0, Math.min(length, Math.floor(Number(entry?.start) || 0)));
+    const end = Math.max(start, Math.min(length, Math.floor(Number(entry?.end) || 0)));
+    const source = entry?.style && typeof entry.style === 'object' ? entry.style : {};
+    const style = {};
+    if (source.bold === true) style.bold = true;
+    if (source.italic === true) style.italic = true;
+    if (source.underline === true) style.underline = true;
+    if (source.strike === true) style.strike = true;
+    if (CHAT_FORMAT_FONTS.has(source.font)) style.font = source.font;
+    if (CHAT_FORMAT_SIZES.has(source.size)) style.size = source.size;
+    if (/^#[0-9a-f]{6}$/i.test(String(source.color || ''))) style.color = String(source.color).toLowerCase();
+    if (/^#[0-9a-f]{6}$/i.test(String(source.highlight || ''))) style.highlight = String(source.highlight).toLowerCase();
+    return end > start && Object.keys(style).length ? { start, end, style } : null;
+  }).filter(Boolean);
+}
+
+function normalizeChatMessage(message = {}) {
+  const text = String(message?.text || '').replace(/\r\n?/g, '\n').slice(0,12000);
+  return { ...message, text, formats:normalizeChatFormats(message?.formats, text.length), formatVersion:1 };
+}
+
+function normalizeChatHistory(messages = []) {
+  const ids = new Set();
+  return (Array.isArray(messages) ? messages : []).map(message => {
+    const normalized = normalizeChatMessage(message);
+    let id = String(normalized.id || '').trim();
+    if (!id || ids.has(id)) id = crypto.randomUUID();
+    ids.add(id);
+    return { ...normalized, id };
+  });
+}
+
+function transformChatFormatRange(formats, textLength, start, end, transform) {
+  const from = Math.max(0, Math.min(textLength, Math.floor(Number(start) || 0)));
+  const to = Math.max(from, Math.min(textLength, Math.floor(Number(end) || 0)));
+  const existing = normalizeChatFormats(formats, textLength);
+  if (to <= from) return existing;
+  const boundaries = [...new Set([0, textLength, from, to, ...existing.flatMap(entry => [entry.start, entry.end])])].sort((a, b) => a - b);
+  const segments = boundaries.slice(0,-1).map((segmentStart, index) => {
+    const segmentEnd = boundaries[index + 1];
+    const style = {};
+    existing.filter(entry => entry.start <= segmentStart && entry.end >= segmentEnd).forEach(entry => Object.assign(style, entry.style));
+    return { start:segmentStart, end:segmentEnd, style:segmentStart < to && segmentEnd > from ? transform({ ...style }) : style };
+  }).filter(entry => entry.end > entry.start && Object.keys(entry.style).length);
+  const compact = [];
+  segments.forEach(entry => {
+    const previous = compact.at(-1);
+    if (previous && previous.end === entry.start && JSON.stringify(previous.style) === JSON.stringify(entry.style)) previous.end = entry.end;
+    else compact.push(entry);
+  });
+  return normalizeChatFormats(compact, textLength);
+}
+
+function applyChatFormatRanges(formats, textLength, start, end, style = null) {
+  return transformChatFormatRange(formats, textLength, start, end, current => style === null ? {} : { ...current, ...style });
+}
+
+function toggleChatFormatRangeProperty(formats, textLength, start, end, property) {
+  const from = Math.max(0, Math.min(textLength, Math.floor(Number(start) || 0)));
+  const to = Math.max(from, Math.min(textLength, Math.floor(Number(end) || 0)));
+  const existing = normalizeChatFormats(formats, textLength);
+  const boundaries = [...new Set([from, to, ...existing.flatMap(entry => [entry.start, entry.end]).filter(point => point > from && point < to)])].sort((a, b) => a - b);
+  const remove = boundaries.slice(0,-1).every((segmentStart, index) => existing.some(entry => entry.start <= segmentStart && entry.end >= boundaries[index + 1] && entry.style[property] === true));
+  return transformChatFormatRange(existing, textLength, from, to, current => {
+    if (remove) delete current[property];
+    else current[property] = true;
+    return current;
+  });
+}
+
+function chatFormattedTextMarkup(message = {}) {
+  const text = String(message.text || '');
+  const formats = normalizeChatFormats(message.formats, text.length);
+  if (!formats.length) return escapeHtml(text);
+  const boundaries = [...new Set([0, text.length, ...formats.flatMap(entry => [entry.start, entry.end])])].sort((a, b) => a - b);
+  return boundaries.slice(0,-1).map((start, index) => {
+    const end = boundaries[index + 1];
+    const style = {};
+    formats.filter(entry => entry.start <= start && entry.end >= end).forEach(entry => Object.assign(style, entry.style));
+    const classes = [style.bold && 'chat-format-bold', style.italic && 'chat-format-italic', style.underline && 'chat-format-underline', style.strike && 'chat-format-strike', style.font && `chat-format-font-${style.font}`, style.size && `chat-format-size-${style.size}`].filter(Boolean);
+    const inline = [style.color ? `color:${style.color}` : '', style.highlight ? `background-color:${style.highlight}` : ''].filter(Boolean).join(';');
+    const content = escapeHtml(text.slice(start,end));
+    return classes.length || inline ? `<span${classes.length ? ` class="${classes.join(' ')}"` : ''}${inline ? ` style="${inline}"` : ''}>${content}</span>` : content;
+  }).join('');
+}
+
 function normalizeWorkspaces(spaces) {
   return spaces.map(space => {
     const requestedLayout = ['dashboard','gallery','list'].includes(space.view?.layout) ? space.view.layout : 'dashboard';
     const requestedSort = requestedLayout === 'dashboard' ? 'manual' : ['manual','newest','title','number'].includes(space.view?.sort) ? space.view.sort : 'manual';
     return {
       ...space,
+      chatPreferences:normalizeSpaceChatPreferences(space.chatPreferences),
+      ...(space.knowledge && typeof space.knowledge === 'object' ? { knowledge:{ ...space.knowledge, chat:normalizeChatHistory(space.knowledge.chat) } } : {}),
       view: { layout:requestedLayout, sort:requestedSort },
       cards: Array.isArray(space.cards) ? space.cards.map((card, index) => ({
       ...card,
@@ -840,7 +948,8 @@ function activeMeeting(space = activeSpace()) {
 function workspaceKnowledge(space = activeSpace()) {
   space.knowledge ||= { items:[], summary:'', facts:[], tags:[], playbook:[], revision:0 };
   space.knowledge.items ||= [];
-  space.knowledge.chat ||= [];
+  space.knowledge.chat = normalizeChatHistory(space.knowledge.chat);
+  space.chatPreferences = normalizeSpaceChatPreferences(space.chatPreferences);
   return space.knowledge;
 }
 
@@ -871,7 +980,10 @@ const WORKSPACE_SEARCH_CONCEPTS = [
   ['learning','навча','навчан','займа','обуча','учус','учит','занима'],
   ['tutor','репетитор','викладач','преподават','учител'],
   ['objection','запереч','возраж','відмов','отказ','каже','говорит','сказал','сказала'],
-  ['price','ціна','цен','дорог','вартіст','стоим'],
+  ['dialogue','діалог','диалог','розмов','разговор','сценар','roleplay','рольов'],
+  ['example','приклад','пример','покажи','покажи'],
+  ['not_interested','цікав','интерес','актуал'],
+  ['price','цін','цен','дорог','вартіст','стоим','стоит','кошту'],
   ['time','час','время','коли','когда','график','розклад','расписан'],
   ['trial','пробн','тестов','демо','подар'],
   ['result','результат','мета','цель','прогрес'],
@@ -913,10 +1025,12 @@ function workspaceContextEntries(space = activeSpace()) {
   ].filter(entry => String(entry.text || '').trim());
 }
 
-function rankWorkspaceEntries(space = activeSpace(), query = '') {
+function rankWorkspaceEntries(space = activeSpace(), query = '', intentHint = '') {
   const queryText = normalizeWorkspaceSearchText(query);
   const queryTokens = workspaceSearchTokens(query);
-  const wantsSpokenReply = /(?:каже|говорит|сказал|сказала|запереч|возраж|що далі|что дальше|як відповісти|как ответить)/i.test(queryText);
+  const intent = intentHint || inferSpaceChatIntent(query);
+  const topicalTokens = queryTokens.filter(token => !['dialogue','example','objection','next'].includes(token) && !/(?:діалог|диалог|розмов|разговор|сценар|приклад|пример|покажи|зроби|сдела|напиши|склади|состав)/i.test(token));
+  const wantsSpokenReply = ['dialogue','draft_response'].includes(intent) || /(?:каже|говорит|сказал|сказала|запереч|возраж|що далі|что дальше|як відповісти|как ответить)/i.test(queryText);
   return workspaceContextEntries(space).map((entry, index) => {
     const titleText = normalizeWorkspaceSearchText(entry.title);
     const bodyText = normalizeWorkspaceSearchText(entry.text);
@@ -932,10 +1046,106 @@ function rankWorkspaceEntries(space = activeSpace(), query = '') {
     if (queryText.length >= 8 && titleText.includes(queryText)) score += 40;
     if (wantsSpokenReply && /приєднання|уточнення|аргумент|заклик|сценар|готов(?:ый|а) ответ|відповідь/i.test(entry.text)) score += 16;
     if (wantsSpokenReply && entry.kind === 'card') score += 10;
+    const topicMatch = !topicalTokens.length || topicalTokens.some(token => titleTokens.has(token) || bodyTokens.has(token) || titleText.includes(token) || bodyText.includes(token));
+    if (intent === 'dialogue' && topicMatch && /(?:^|\n)\s*(?:т|м|к|менеджер|клієнт|клиент)\s*[:—-]/im.test(entry.text)) score += 70;
+    if (intent === 'dialogue' && topicMatch && /(?:повн(?:ий|ый)|ціл(?:ий|ый)|готов(?:ий|ый)).{0,30}(?:діалог|диалог)|(?:діалог|диалог).{0,30}(?:приклад|пример)/i.test(`${entry.title} ${entry.text}`)) score += 45;
+    if (intent === 'dialogue' && /приєднання|уточнення|аргумент|заклик/i.test(entry.text)) score += 20;
     if (queryTokens.includes('tutor') && (titleTokens.has('learning') || bodyTokens.has('learning'))) score += 8;
     if (queryTokens.includes('learning') && titleTokens.has('learning')) score += 12;
     return { ...entry, score, index };
   }).sort((left, right) => right.score - left.score || left.index - right.index);
+}
+
+function inferSpaceChatIntent(message = '') {
+  const text = normalizeWorkspaceSearchText(message);
+  if (isWorkspaceCardCommand(message)) return 'create_cards';
+  if (/(?:приклад|пример|покажи|змоделю|смоделиру|склади|состав|зроби|сдела|напиши|дай).{0,50}(?:діалог|диалог|розмов|разговор|сценар)|(?:діалог|диалог|розмов|разговор|сценар).{0,50}(?:приклад|пример|ціл|целик)/i.test(text)) return 'dialogue';
+  if (/(?:що|что) (?:відповісти|ответить|сказати|сказать)|як (?:відповісти|сказати)|как (?:ответить|сказать)|(?:що|что) далі|(?:що|что) дальше|наступн\w* крок|следующ\w* шаг|(?:дай|підкажи|предложи|запропонуй) (?:відповід|ответ|реплик|фраз)|(?:клієнт|клиент|людина|человек).{0,40}(?:каже|говорит|сказав|сказал|сказала)/i.test(text)) return 'draft_response';
+  if (/(?:підсумуй|резюмируй|обобщи|узагальни|кратко|коротко|summary)/i.test(text)) return 'summarize';
+  if (/(?:поясни|объясни|чому|почему|навіщо|зачем|що означає|что означает)/i.test(text)) return 'explain';
+  return 'answer';
+}
+
+function isDependentSpaceChatFollowup(message = '') {
+  return /^(?:а\s+)?(?:теперь|тепер|далі|дальше|продолжи|продовжу|целиком|повністю|короче|коротше|подробнее|детальніше|друго\w* вариант|інш\w* варіант)(?:\s|$|[,.!?])/i.test(normalizeWorkspaceSearchText(message));
+}
+
+function resolveSpaceChatIntent(message = '', priorUserText = '') {
+  const direct = inferSpaceChatIntent(message);
+  return direct !== 'answer' || !isDependentSpaceChatFollowup(message) ? direct : inferSpaceChatIntent(`${priorUserText}\n${message}`);
+}
+
+function parseSpaceChatPreferenceCommand(message = '') {
+  const source = String(message || '').trim();
+  const text = source.toLocaleLowerCase('uk-UA').replace(/\s+/g, ' ');
+  const patch = {};
+  const turnPatch = {};
+  const persistentLead = /^(?:пожалуйста[\s,]+)?(?:(?:дальше|надалі|відтепер|впредь|теперь)\s+)?(?:отвечай|відповідай|пиши|давай)(?=\s|$|[,:])/i;
+  const isPreferenceMention = /(?:что значит|что означает|що означає|як сказати)/i.test(text);
+  const resetMatch = !isPreferenceMention && source.match(/^(?:(?:сбрось|скинь|забудь|скинути|забути)(?:\s+мои?|\s+мої)?\s+(?:настройки?(?:\s+(?:чата|стиля|ответов))?|налаштування|стиль(?:\s+ответов)?)|(?:отвечай|відповідай)\s+как\s+обычно)/i);
+  const leadMatch = !isPreferenceMention && source.match(persistentLead);
+  let directiveTail = '';
+  if (resetMatch) {
+    Object.assign(patch, { verbosity:'balanced', format:'auto', language:'auto' });
+    directiveTail = source.slice(resetMatch[0].length).replace(/^[\s,;—–-]+/, '');
+  } else if (leadMatch) {
+    directiveTail = source.slice(leadMatch[0].length).replace(/^[\s,]*(?:(?:пожалуйста|будь ласка)[\s,]+)?/i, '');
+  }
+
+  const applyPreferenceClause = rawClause => {
+    const clause = String(rawClause || '').trim().toLocaleLowerCase('uk-UA').replace(/\s+/g, ' ');
+    if (!clause || /^(?:пожалуйста|будь ласка|если что)$/.test(clause)) return true;
+    if (/^(?:(?:мне|ответы?|відповіді)\s+)?(?:покороче|короче|кратко|лаконично|стисло|коротше)(?:\s+(?:пожалуйста|будь ласка|если что))?$/.test(clause)) patch.verbosity = 'short';
+    else if (/^(?:(?:мне|ответы?|відповіді)\s+)?(?:подробнее|детальнее|развернуто|детальніше|докладно|розгорнуто)(?:\s+(?:пожалуйста|будь ласка))?$/.test(clause)) patch.verbosity = 'detailed';
+    else if (/^(?:без списков?|сплошн(?:ым|ой) текст(?:ом)?|без переліку|суцільн(?:им|ою) текстом?)$/.test(clause)) patch.format = 'paragraphs';
+    else if (/^(?:со списком|списками|маркированными пунктами|зі списком|переліком|пунктами)$/.test(clause)) patch.format = 'bullets';
+    else if (/^(?:на русском|російською|на русском языке)$/.test(clause)) patch.language = 'ru';
+    else if (/^(?:на украинском|українською|на украинском языке)$/.test(clause)) patch.language = 'uk';
+    else if (/^(?:на английском|англійською|на английском языке|in english)$/.test(clause)) patch.language = 'en';
+    else return false;
+    return true;
+  };
+
+  let taskText = '';
+  if (directiveTail && !resetMatch) {
+    const separators = [...directiveTail.matchAll(/(?:\s*[,;—–]\s*(?:(?:и|і|но|а|але)\s+)?|\s+-\s+(?:(?:и|і|но|а|але)\s+)?|\s+(?:и|і|но|а|але)\s+)/giu)];
+    let cursor = 0;
+    const clauses = separators.map(separator => {
+      const clause = { text:directiveTail.slice(cursor, separator.index), start:cursor };
+      cursor = separator.index + separator[0].length;
+      return clause;
+    });
+    clauses.push({ text:directiveTail.slice(cursor), start:cursor });
+    for (const clause of clauses) {
+      if (!clause.text.trim()) continue;
+      if (applyPreferenceClause(clause.text)) continue;
+      taskText = directiveTail.slice(clause.start).trim();
+      break;
+    }
+  } else if (resetMatch && directiveTail) taskText = directiveTail;
+
+  if (!Object.keys(patch).length) {
+    if (/(?:^|[,:;]\s*)(?:коротко|кратко|стисло|лаконично)(?=\s|$|[,.!?;:])/i.test(text)) turnPatch.verbosity = 'short';
+    else if (/(?:^|[,:;]\s*)(?:подробно|детально|докладно)(?=\s|$|[,.!?;:])/i.test(text)) turnPatch.verbosity = 'detailed';
+    if (/(?:без списк|сплошн(?:ым|ой) текст|без перелік|суцільн(?:им|ою) текст)/i.test(text)) turnPatch.format = 'paragraphs';
+  }
+  if (!Object.keys(patch).length) taskText = source;
+  if (!Object.keys(patch).length && Object.keys(turnPatch).length) taskText = taskText.replace(/^(?:(?:коротко|кратко|стисло|лаконично|подробно|детально|докладно)|(?:без списков?|сплошн(?:ым|ой) текст(?:ом)?|без переліку|суцільн(?:им|ою) текстом?))[,:;—–-]?\s+/i, '').trim() || source;
+  const hasPersistent = Object.keys(patch).length > 0;
+  const pure = hasPersistent && !taskText;
+  return { kind:pure ? 'pure' : hasPersistent ? 'mixed' : Object.keys(turnPatch).length ? 'turn' : 'none', patch, turnPatch, taskText:pure ? '' : taskText };
+}
+
+function spaceChatPreferenceAcknowledgement(preferences, message = '') {
+  const ukrainian = /[іїєґ]/i.test(message);
+  const parts = [];
+  if (preferences.verbosity === 'short') parts.push(ukrainian ? 'відповідатиму коротше' : 'буду отвечать короче');
+  else if (preferences.verbosity === 'detailed') parts.push(ukrainian ? 'відповідатиму докладніше' : 'буду отвечать подробнее');
+  else parts.push(ukrainian ? 'повертаю звичайну докладність' : 'возвращаю обычную подробность');
+  if (preferences.format === 'paragraphs') parts.push(ukrainian ? 'без списків' : 'без списков');
+  else if (preferences.format === 'bullets') parts.push(ukrainian ? 'зі списками, коли це доречно' : 'со списками, когда это уместно');
+  if (preferences.language !== 'auto') parts.push({ ru:'на русском', uk:'українською', en:'in English' }[preferences.language]);
+  return `${ukrainian ? 'Добре' : 'Хорошо'} — ${parts.join(', ')}.`;
 }
 
 function workspaceRelevantExcerpt(entry, query, limit) {
@@ -956,9 +1166,10 @@ function isWorkspaceCardCommand(message = '') {
   return /(?:создай|сделай|собери|разложи|вынеси|сложи|створи|зроби|збери|розклади|винеси).{0,40}(?:карточ|картк)/i.test(message);
 }
 
-function buildSpaceChatContext(space = activeSpace(), query = '') {
+function buildSpaceChatContext(space = activeSpace(), query = '', intentHint = '') {
   const knowledge = workspaceKnowledge(space);
-  const ranked = rankWorkspaceEntries(space, query);
+  const intent = intentHint || inferSpaceChatIntent(query);
+  const ranked = rankWorkspaceEntries(space, query, intent);
   const broad = isBroadWorkspaceRequest(query);
   const relevant = broad ? ranked : ranked.filter(entry => entry.score > 0);
   const selected = (relevant.length ? relevant : ranked).slice(0, broad ? 40 : 12);
@@ -966,6 +1177,8 @@ function buildSpaceChatContext(space = activeSpace(), query = '') {
   const perEntryLimit = broad ? 4200 : 8500;
   const overview = [
     `Пространство: ${space.title}`,
+    `Тип задачи: ${intent}`,
+    intent === 'dialogue' ? 'Формат результата: новый цельный пример диалога; объедини правила, подходящий сценарий, аргументы и следующий шаг из нескольких материалов.' : '',
     knowledge.summary ? `Общая выжимка: ${String(knowledge.summary).slice(0,5000)}` : '',
     knowledge.facts?.length ? `Подтверждённые факты:\n${knowledge.facts.slice(0,40).map(item => `• ${item}`).join('\n').slice(0,7000)}` : '',
     knowledge.tags?.length ? `Темы: ${knowledge.tags.slice(0,80).join(', ')}` : '',
@@ -980,16 +1193,84 @@ function buildSpaceChatContext(space = activeSpace(), query = '') {
   return packet.slice(0,budget);
 }
 
-function localSpaceChatAnswer(space, message) {
+function workspaceLabeledPhrase(entries, labels) {
+  const pattern = new RegExp(`(?:^|\\n)\\s*(?:${labels.join('|')})\\s*[:—-]\\s*([^\\n]+)`, 'iu');
+  const candidates = [];
+  for (const entry of entries) {
+    const match = String(entry?.text || '').match(pattern);
+    if (match?.[1]) {
+      const phrase = match[1].trim().replace(/^[«„“"']+|[»“"'.]+$/g, '');
+      const score = Math.min(80, phrase.length) + (/[«»]/.test(match[1]) ? 30 : 0) + (/\d/.test(phrase) ? 25 : 0) - (/під конкретну потребу|под конкретную потребность/i.test(phrase) ? 50 : 0);
+      candidates.push({ phrase, score });
+    }
+  }
+  return candidates.sort((left, right) => right.score - left.score)[0]?.phrase || '';
+}
+
+function workspaceResponseIsUkrainian(message, entries = []) {
+  const evidence = entries.map(entry => `${entry?.title || ''} ${entry?.text || ''}`).join(' ');
+  if (/[іїєґ]/i.test(evidence)) return true;
+  if (/[а-яё]/i.test(evidence)) return false;
+  return /[іїєґ]|\b(?:що|коли|далі|людина|приклад|діалог)\b/i.test(message);
+}
+
+function localSpaceDialogueAnswer(ranked, message, ukrainian) {
+  const relevant = ranked.filter(entry => entry.score > 0).slice(0,8);
+  const titleScenario = relevant.map(entry => String(entry.title || '').match(/«([^»]+)»/)?.[1]).find(Boolean);
+  const objection = titleScenario?.split('/')[0].trim() || (ukrainian ? 'Мені це зараз не актуально.' : 'Мне это сейчас неактуально.');
+  const join = workspaceLabeledPhrase(relevant, ['Приєднання','Присоединение']) || (ukrainian ? 'Розумію вас.' : 'Понимаю вас.');
+  const clarify = workspaceLabeledPhrase(relevant, ['Уточнення','Уточнение']) || (ukrainian ? 'Підкажіть, що саме вас зупиняє?' : 'Подскажите, что именно вас останавливает?');
+  const argument = workspaceLabeledPhrase(relevant, ['Аргумент']) || (ukrainian ? 'Тоді варто відштовхнутися саме від вашої мети й потрібного формату.' : 'Тогда стоит оттолкнуться именно от вашей цели и нужного формата.');
+  const callToAction = workspaceLabeledPhrase(relevant, ['Заклик','Питання-заклик','Призыв','Вопрос-призыв']) || (ukrainian ? 'Який наступний крок буде зручним для вас?' : 'Какой следующий шаг будет удобен для вас?');
+  return ukrainian
+    ? `К: «${objection}»\nМ: «${join} ${clarify}»\nК: «Наприклад, я вже займаюся, але не бачу потрібного прогресу».\nМ: «Зрозуміло. А якої мети хочете досягти й чого бракує у поточному форматі?»\nК: «Хочу більше практики й упевненості».\nМ: «${argument} ${callToAction}»`
+    : `К: «${objection}»\nМ: «${join} ${clarify}»\nК: «Например, я уже занимаюсь, но не вижу нужного прогресса».\nМ: «Понятно. Какой цели хотите достичь и чего не хватает в текущем формате?»\nК: «Хочу больше практики и уверенности».\nМ: «${argument} ${callToAction}»`;
+}
+
+function localSpaceChatAnswer(space, message, intentHint = '', responsePreferences = {}) {
   if (isWorkspaceCardCommand(message)) return null;
-  const best = rankWorkspaceEntries(space, message)[0];
+  const preferences = normalizeSpaceChatPreferences(responsePreferences);
+  const intent = intentHint || inferSpaceChatIntent(message);
+  const ranked = rankWorkspaceEntries(space, message, intent);
+  const best = ranked[0];
   if (!best || best.score < 12) return null;
-  const excerpt = workspaceRelevantExcerpt(best, message, 3200);
-  if (!excerpt) return null;
-  const ukrainian = /[іїєґ]|\b(?:що|коли|далі|людина|вони)\b/i.test(message);
+  if (['answer','explain'].includes(intent)) {
+    const evidenceTokens = new Set(workspaceSearchTokens(`${best.title} ${best.text}`));
+    const queryTokens = workspaceSearchTokens(message);
+    const coverage = queryTokens.length ? queryTokens.filter(token => evidenceTokens.has(token)).length / queryTokens.length : 0;
+    if (queryTokens.length >= 2 && coverage < .45) return null;
+  }
+  const relevantEntries = ranked.filter(entry => entry.score > 0).slice(0,8);
+  const ukrainian = workspaceResponseIsUkrainian(message, relevantEntries);
+  if (intent === 'dialogue') {
+    const dialogue = localSpaceDialogueAnswer(ranked, message, ukrainian);
+    if (!dialogue) return null;
+    return {
+      text:`${ukrainian ? 'Ось цілісний приклад, складений за кількома матеріалами простору:' : 'Вот цельный пример, собранный из нескольких материалов пространства:'}\n\n${dialogue}`,
+      provider:ukrainian ? 'локальний синтез' : 'локальный синтез'
+    };
+  }
+  const selected = ranked.filter(entry => entry.score >= Math.max(12, best.score * .38)).slice(0,3);
+  if (intent === 'draft_response') {
+    const join = workspaceLabeledPhrase(selected, ['Приєднання','Присоединение']);
+    const clarify = workspaceLabeledPhrase(selected, ['Уточнення','Уточнение']);
+    const argument = workspaceLabeledPhrase(selected, ['Аргумент']);
+    const callToAction = workspaceLabeledPhrase(selected, ['Заклик','Питання-заклик','Призыв','Вопрос-призыв']);
+    const reply = [join, clarify, argument, callToAction].filter(Boolean).join(' ');
+    if (reply) return {
+      text:`${ukrainian ? 'Можна відповісти так:' : 'Можно ответить так:'}\n\n«${reply}»`,
+      provider:ukrainian ? 'локальний синтез' : 'локальный синтез'
+    };
+  }
+  const phraseLimit = preferences.verbosity === 'short' ? 3 : preferences.verbosity === 'detailed' ? 12 : 8;
+  const phrases = dedupeStrings(selected.flatMap(entry => String(entry.text || '').split(/\n+|(?<=[.!?])\s+/))
+    .map(part => part.replace(/^\s*(?:[•\-–—]\s+|\d+[.)]\s+)/, '').trim())
+    .filter(part => part.length >= 12 && part.length <= 600)).slice(0,phraseLimit);
+  if (!phrases.length) return null;
+  const body = phrases.length === 1 ? phrases[0] : preferences.format === 'paragraphs' ? phrases.join(' ') : phrases.map(phrase => `• ${phrase}`).join('\n');
   return {
-    text:`${ukrainian ? 'У матеріалах є готова відповідь' : 'В материалах есть готовый ответ'} «${best.title}»:\n\n${excerpt}`,
-    provider:ukrainian ? 'матеріали простору' : 'материалы пространства'
+    text:`${ukrainian ? 'За матеріалами простору:' : 'По материалам пространства:'}\n\n${body}`,
+    provider:ukrainian ? 'локальний синтез' : 'локальный синтез'
   };
 }
 
@@ -1055,6 +1336,40 @@ function setKnowledgeHubTab(tab) {
   document.getElementById('knowledge-materials-panel').hidden = knowledgeHubTab !== 'materials';
 }
 
+function scheduleSpaceChatUiSave() {
+  clearTimeout(spaceChatUiSaveTimer);
+  spaceChatUiSaveTimer = setTimeout(() => { spaceChatUiSaveTimer = null; persistWorkspaces(); }, 350);
+}
+
+function applySpaceChatUi(space = activeSpace()) {
+  const preferences = normalizeSpaceChatPreferences(space.chatPreferences);
+  space.chatPreferences = preferences;
+  spaceChatWheelDelta = 0;
+  spaceChatPanel?.style.setProperty('--chat-text-scale', String(preferences.textScale / 100));
+  if (spaceChatScaleValue) spaceChatScaleValue.textContent = `${preferences.textScale}%`;
+  const scaleDown = document.getElementById('space-chat-scale-down');
+  const scaleUp = document.getElementById('space-chat-scale-up');
+  if (scaleDown) scaleDown.disabled = preferences.textScale <= 80;
+  if (scaleUp) scaleUp.disabled = preferences.textScale >= 200;
+  if (spaceChatVerbosity) spaceChatVerbosity.value = preferences.verbosity;
+}
+
+function setSpaceChatTextScale(nextScale, { announce = true } = {}) {
+  const space = activeSpace();
+  const preferences = normalizeSpaceChatPreferences(space.chatPreferences);
+  const requestedScale = Number(nextScale);
+  const next = Number.isFinite(requestedScale) ? Math.max(80, Math.min(200, Math.round(requestedScale / 10) * 10)) : 100;
+  if (next === preferences.textScale) { applySpaceChatUi(space); return false; }
+  const wasAtBottom = spaceChatFeed.scrollHeight - spaceChatFeed.scrollTop - spaceChatFeed.clientHeight < 28;
+  const ratio = spaceChatFeed.scrollHeight > spaceChatFeed.clientHeight ? spaceChatFeed.scrollTop / (spaceChatFeed.scrollHeight - spaceChatFeed.clientHeight) : 1;
+  space.chatPreferences = { ...preferences, textScale:next };
+  applySpaceChatUi(space);
+  requestAnimationFrame(() => { spaceChatFeed.scrollTop = wasAtBottom ? spaceChatFeed.scrollHeight : ratio * Math.max(0, spaceChatFeed.scrollHeight - spaceChatFeed.clientHeight); });
+  scheduleSpaceChatUiSave();
+  if (announce) showToast(`Масштаб текста чата: ${next}%`);
+  return true;
+}
+
 function renderSpaceChat() {
   const knowledge = workspaceKnowledge();
   const messages = knowledge.chat.slice(-80);
@@ -1062,10 +1377,11 @@ function renderSpaceChat() {
   const history = messages.map(message => {
     const created = Number(message.createdCards || 0);
     const meta = [created ? `Создано карточек: ${created}` : '', message.provider ? message.provider : ''].filter(Boolean).join(' · ');
-    return `<article class="space-chat-message ${message.role === 'user' ? 'user' : 'assistant'}"><span>${message.role === 'user' ? 'Вы' : '✦'}</span><div><strong>${message.role === 'user' ? 'Вы' : 'Пространство AI'}</strong><p>${escapeHtml(message.text || '').replace(/\n/g, '<br>')}</p>${meta ? `<small>${escapeHtml(meta)}</small>` : ''}</div></article>`;
+    return `<article class="space-chat-message ${message.role === 'user' ? 'user' : 'assistant'}" data-chat-message="${escapeAttr(message.id || '')}"><span>${message.role === 'user' ? 'Вы' : '✦'}</span><div><strong>${message.role === 'user' ? 'Вы' : 'Пространство AI'}</strong><div class="space-chat-message-text" data-chat-message-id="${escapeAttr(message.id || '')}" title="Выделите фрагмент, чтобы изменить шрифт или оформление">${chatFormattedTextMarkup(message)}</div>${meta ? `<small>${escapeHtml(meta)}</small>` : ''}</div></article>`;
   }).join('');
   const pending = spaceChatBusy && spaceChatBusySpaceId === activeSpaceId ? '<article class="space-chat-message assistant pending"><span>✦</span><div><strong>Изучаю пространство…</strong><p>Сопоставляю материалы и готовлю ответ.</p></div></article>' : '';
   spaceChatFeed.innerHTML = `${welcome}${history}${pending}`;
+  applySpaceChatUi();
   const sendButton = document.getElementById('space-chat-send');
   sendButton.disabled = spaceChatBusy;
   spaceChatInput.disabled = spaceChatBusy;
@@ -1161,10 +1477,29 @@ async function sendSpaceChatMessage(preset = '') {
   if (!message) return;
   const space = activeSpace();
   const knowledge = workspaceKnowledge(space);
-  const history = knowledge.chat.slice(-8).map(item => ({ role:item.role, text:item.text }));
-  const retrievalQuery = [...history.filter(item => item.role === 'user').slice(-2).map(item => item.text), message].join('\n');
-  const localAnswer = localSpaceChatAnswer(space, retrievalQuery);
-  const userMessage = { id:crypto.randomUUID(), role:'user', text:message, createdAt:Date.now() };
+  const preferenceCommand = parseSpaceChatPreferenceCommand(message);
+  const storedPreferences = normalizeSpaceChatPreferences({ ...space.chatPreferences, ...preferenceCommand.patch });
+  space.chatPreferences = storedPreferences;
+  const effectivePreferences = normalizeSpaceChatPreferences({ ...storedPreferences, ...preferenceCommand.turnPatch });
+  const taskMessage = String(preferenceCommand.taskText || message).trim();
+  if (preferenceCommand.kind === 'pure') {
+    knowledge.chat.push(
+      { id:crypto.randomUUID(), role:'user', kind:'preference', text:message, modelText:'', createdAt:Date.now() },
+      { id:crypto.randomUUID(), role:'assistant', kind:'preference_ack', text:spaceChatPreferenceAcknowledgement(storedPreferences, message), provider:'настройка чата', createdAt:Date.now() }
+    );
+    knowledge.chat = knowledge.chat.slice(-80);
+    spaceChatInput.value = '';
+    persistWorkspaces();
+    renderKnowledgeHub();
+    return;
+  }
+  const history = knowledge.chat.filter(item => !['preference','preference_ack'].includes(item.kind)).slice(-8).map(item => ({ role:item.role, text:item.modelText || item.text }));
+  const priorUserText = history.filter(item => item.role === 'user').slice(-1).map(item => item.text).join('\n');
+  const dependentFollowup = isDependentSpaceChatFollowup(taskMessage);
+  const taskIntent = resolveSpaceChatIntent(taskMessage, priorUserText);
+  const retrievalQuery = dependentFollowup ? [priorUserText, taskMessage].filter(Boolean).join('\n') : taskMessage;
+  const localAnswer = localSpaceChatAnswer(space, retrievalQuery, taskIntent, effectivePreferences);
+  const userMessage = { id:crypto.randomUUID(), role:'user', text:message, modelText:taskMessage, createdAt:Date.now() };
   knowledge.chat.push(userMessage);
   knowledge.chat = knowledge.chat.slice(-80);
   spaceChatInput.value = '';
@@ -1174,8 +1509,8 @@ async function sendSpaceChatMessage(preset = '') {
   renderKnowledgeHub();
   try {
     const result = await window.sloy.spaceChat({
-      message, history, context:buildSpaceChatContext(space, retrievalQuery),
-      language:loadAiSettings().transcriptionLanguage || 'uk'
+      message:taskMessage, history, context:buildSpaceChatContext(space, retrievalQuery, taskIntent),
+      language:loadAiSettings().transcriptionLanguage || 'uk', preferences:effectivePreferences
     });
     let created = [];
     if (result?.ok && result.action === 'create_cards') created = publishSpaceChatCards(space, result.cards, userMessage.id);
@@ -1193,7 +1528,7 @@ async function sendSpaceChatMessage(preset = '') {
       showToast(`${created.length} карточек создано из материалов пространства`);
     }
   } catch {
-    const localAnswer = localSpaceChatAnswer(space, retrievalQuery);
+    const localAnswer = localSpaceChatAnswer(space, retrievalQuery, taskIntent, effectivePreferences);
     knowledge.chat.push({ id:crypto.randomUUID(), role:'assistant', text:localAnswer?.text || spaceChatErrorMessage('network'), provider:localAnswer?.provider || '', createdAt:Date.now() });
     knowledge.chat = knowledge.chat.slice(-80);
     persistWorkspaces();
@@ -4585,6 +4920,35 @@ document.getElementById('space-chat-suggestions')?.addEventListener('click', eve
 spaceChatInput?.addEventListener('keydown', event => {
   if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendSpaceChatMessage(); }
 });
+spaceChatPanel?.addEventListener('wheel', event => {
+  if (!event.ctrlKey || knowledgeHubTab !== 'chat') { spaceChatWheelDelta = 0; return; }
+  event.preventDefault();
+  event.stopPropagation();
+  const pixels = event.deltaY * (event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? 120 : 1);
+  spaceChatWheelDelta += pixels;
+  if (Math.abs(spaceChatWheelDelta) < 55) return;
+  const direction = spaceChatWheelDelta < 0 ? 10 : -10;
+  spaceChatWheelDelta = 0;
+  setSpaceChatTextScale(normalizeSpaceChatPreferences(activeSpace().chatPreferences).textScale + direction);
+}, { passive:false });
+document.addEventListener('keyup', event => { if (event.key === 'Control') spaceChatWheelDelta = 0; });
+document.getElementById('space-chat-scale-down')?.addEventListener('click', () => setSpaceChatTextScale(normalizeSpaceChatPreferences(activeSpace().chatPreferences).textScale - 10));
+document.getElementById('space-chat-scale-up')?.addEventListener('click', () => setSpaceChatTextScale(normalizeSpaceChatPreferences(activeSpace().chatPreferences).textScale + 10));
+spaceChatScaleValue?.addEventListener('click', () => setSpaceChatTextScale(100));
+spaceChatVerbosity?.addEventListener('change', event => {
+  const space = activeSpace();
+  space.chatPreferences = normalizeSpaceChatPreferences({ ...space.chatPreferences, verbosity:event.target.value });
+  persistWorkspaces();
+  applySpaceChatUi(space);
+  showToast(`Стиль ответов: ${{ short:'коротко', balanced:'обычно', detailed:'подробно' }[space.chatPreferences.verbosity]}`);
+});
+document.addEventListener('keydown', event => {
+  if (!knowledgeDialog.open || knowledgeHubTab !== 'chat' || !event.ctrlKey || event.altKey) return;
+  if (!['+','=','-','0'].includes(event.key)) return;
+  event.preventDefault();
+  const current = normalizeSpaceChatPreferences(activeSpace().chatPreferences).textScale;
+  setSpaceChatTextScale(event.key === '0' ? 100 : current + (event.key === '-' ? -10 : 10));
+});
 
 document.getElementById('knowledge-send')?.addEventListener('click', addKnowledgeText);
 document.getElementById('knowledge-image')?.addEventListener('click', () => knowledgeImageInput.click());
@@ -4704,7 +5068,7 @@ function applyFont(font) {
 document.querySelectorAll('.font-option').forEach(btn => {
   btn.addEventListener('click', () => {
     const font = btn.dataset.font;
-    if (savedTextRange && savedEditableElement?.isConnected) {
+    if (savedChatSelection || (savedTextRange && savedEditableElement?.isConnected)) {
       const richFont = { default:'Segoe UI', JetBrains:'JetBrains Mono' }[font] || font;
       applyRichCommand('fontName', richFont);
       closeFontPanel();
@@ -4944,11 +5308,61 @@ function closeFontPanel() { fontPanel.hidden = true; }
 const richTextToolbar = document.getElementById('rich-text-toolbar');
 let savedTextRange = null;
 let savedEditableElement = null;
+let savedChatSelection = null;
 
 function clearRememberedTextSelection() {
   savedTextRange = null;
   savedEditableElement = null;
+  savedChatSelection = null;
+  richTextToolbar.classList.remove('chat-selection');
   richTextToolbar.hidden = true;
+}
+
+function chatSelectionOffset(root, container, offset) {
+  const range = document.createRange();
+  range.selectNodeContents(root);
+  range.setEnd(container, offset);
+  return range.toString().length;
+}
+
+function positionRichTextToolbar(rect, insideKnowledgeDialog = false) {
+  const bounds = insideKnowledgeDialog ? knowledgeDialog.getBoundingClientRect() : { left:0, top:0, width:window.innerWidth, height:window.innerHeight };
+  const width = richTextToolbar.offsetWidth || Math.min(620, bounds.width - 16);
+  const height = richTextToolbar.offsetHeight || 42;
+  const centered = rect.left - bounds.left + rect.width / 2 - width / 2;
+  const left = Math.max(8, Math.min(bounds.width - width - 8, centered));
+  const above = rect.top - bounds.top - height - 8;
+  const top = above >= 8 ? above : Math.min(bounds.height - height - 8, rect.bottom - bounds.top + 8);
+  richTextToolbar.style.left = `${left}px`;
+  richTextToolbar.style.top = `${Math.max(8, top)}px`;
+}
+
+function restoreChatTextSelection(target = savedChatSelection) {
+  if (!target || target.spaceId !== activeSpaceId) return false;
+  const root = [...spaceChatFeed.querySelectorAll('.space-chat-message-text[data-chat-message-id]')].find(node => node.dataset.chatMessageId === target.messageId);
+  if (!root) return false;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const points = [];
+  let total = 0;
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const next = total + node.data.length;
+    points.push({ node, start:total, end:next });
+    total = next;
+  }
+  const pointAt = offset => {
+    const point = points.find(item => offset <= item.end) || points.at(-1);
+    return point ? { node:point.node, offset:Math.max(0, Math.min(point.node.data.length, offset - point.start)) } : null;
+  };
+  const start = pointAt(target.start);
+  const end = pointAt(target.end);
+  if (!start || !end) return false;
+  const range = document.createRange();
+  range.setStart(start.node, start.offset);
+  range.setEnd(end.node, end.offset);
+  const selection = window.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+  return true;
 }
 
 function rememberTextSelection() {
@@ -4959,19 +5373,67 @@ function rememberTextSelection() {
   }
   const range = selection.getRangeAt(0);
   const node = range.commonAncestorContainer.nodeType === Node.TEXT_NODE ? range.commonAncestorContainer.parentElement : range.commonAncestorContainer;
+  const chatText = node?.closest?.('.space-chat-message-text[data-chat-message-id]');
   const editable = node?.closest?.('[contenteditable="true"]');
   if (richTextToolbar.contains(node)) return;
-  if (!editable) { clearRememberedTextSelection(); return; }
-  savedTextRange = range.cloneRange();
-  savedEditableElement = editable;
+  if (chatText && chatText.contains(range.startContainer) && chatText.contains(range.endContainer)) {
+    const start = chatSelectionOffset(chatText, range.startContainer, range.startOffset);
+    const end = chatSelectionOffset(chatText, range.endContainer, range.endOffset);
+    if (end <= start) { clearRememberedTextSelection(); return; }
+    savedChatSelection = { spaceId:activeSpaceId, messageId:chatText.dataset.chatMessageId, start, end };
+    savedTextRange = null;
+    savedEditableElement = null;
+    if (richTextToolbar.parentElement !== knowledgeDialog) knowledgeDialog.appendChild(richTextToolbar);
+    richTextToolbar.classList.add('chat-selection');
+  } else {
+    if (!editable) { clearRememberedTextSelection(); return; }
+    if (richTextToolbar.parentElement !== document.body) document.body.appendChild(richTextToolbar);
+    savedTextRange = range.cloneRange();
+    savedEditableElement = editable;
+    savedChatSelection = null;
+    richTextToolbar.classList.remove('chat-selection');
+  }
   const rect = range.getBoundingClientRect();
   richTextToolbar.hidden = false;
-  const width = richTextToolbar.offsetWidth || 620;
-  richTextToolbar.style.left = `${Math.max(8, Math.min(window.innerWidth - width - 8, rect.left + rect.width / 2 - width / 2))}px`;
-  richTextToolbar.style.top = `${Math.max(8, rect.top - 44)}px`;
+  positionRichTextToolbar(rect, Boolean(chatText));
+}
+
+function chatFontKey(value = '') {
+  const normalized = String(value || '').trim().toLocaleLowerCase('en-US');
+  return ({ 'segoe ui':'segoe', inter:'inter', roboto:'roboto', montserrat:'montserrat', comfortaa:'comfortaa', georgia:'georgia', arial:'arial', 'times new roman':'times', times:'times', 'jetbrains mono':'jetbrains', jetbrains:'jetbrains' })[normalized] || '';
+}
+
+function applyChatSelectionFormat(command, value = null) {
+  const target = savedChatSelection;
+  if (!target || target.spaceId !== activeSpaceId) return;
+  const knowledge = workspaceKnowledge();
+  const message = knowledge.chat.find(item => item.id === target.messageId);
+  if (!message) { clearRememberedTextSelection(); return; }
+  let style = {};
+  const toggleProperty = ({ bold:'bold', italic:'italic', underline:'underline', strikeThrough:'strike' })[command];
+  if (toggleProperty) style[toggleProperty] = true;
+  else if (command === 'fontName') style.font = chatFontKey(value);
+  else if (command === 'fontSize') style.size = ({ 2:'sm', 3:'md', 4:'lg', 5:'xl' })[String(value)] || 'md';
+  else if (command === 'foreColor' && /^#[0-9a-f]{6}$/i.test(String(value || ''))) style.color = String(value).toLowerCase();
+  else if (command === 'hiliteColor' && /^#[0-9a-f]{6}$/i.test(String(value || ''))) style.highlight = String(value).toLowerCase();
+  else if (command !== 'removeFormat') return;
+  if (command !== 'removeFormat' && !Object.keys(style).length) return;
+  const scrollTop = spaceChatFeed.scrollTop;
+  message.formats = toggleProperty
+    ? toggleChatFormatRangeProperty(message.formats, String(message.text || '').length, target.start, target.end, toggleProperty)
+    : applyChatFormatRanges(message.formats, String(message.text || '').length, target.start, target.end, command === 'removeFormat' ? null : style);
+  message.formatVersion = 1;
+  persistWorkspaces();
+  renderSpaceChat();
+  requestAnimationFrame(() => {
+    spaceChatFeed.scrollTop = Math.min(scrollTop, Math.max(0, spaceChatFeed.scrollHeight - spaceChatFeed.clientHeight));
+    richTextToolbar.hidden = false;
+    restoreChatTextSelection(target);
+  });
 }
 
 function applyRichCommand(command, value = null) {
+  if (savedChatSelection) { applyChatSelectionFormat(command, value); return; }
   if (!savedTextRange || !savedEditableElement) return;
   const selection = window.getSelection();
   selection.removeAllRanges();
@@ -4995,8 +5457,8 @@ richTextToolbar.querySelector('[data-rich-block]')?.addEventListener('click', ev
 });
 document.getElementById('rich-font-name')?.addEventListener('change', event => applyRichCommand('fontName', event.target.value.trim()));
 document.getElementById('rich-font-size')?.addEventListener('change', event => applyRichCommand('fontSize', event.target.value));
-document.getElementById('rich-text-color')?.addEventListener('input', event => applyRichCommand('foreColor', event.target.value));
-document.getElementById('rich-highlight-color')?.addEventListener('input', event => applyRichCommand('hiliteColor', event.target.value));
+document.getElementById('rich-text-color')?.addEventListener('change', event => applyRichCommand('foreColor', event.target.value));
+document.getElementById('rich-highlight-color')?.addEventListener('change', event => applyRichCommand('hiliteColor', event.target.value));
 document.getElementById('rich-emoji')?.addEventListener('change', event => {
   if (event.target.value) applyRichCommand('insertText', event.target.value);
   event.target.value = '';

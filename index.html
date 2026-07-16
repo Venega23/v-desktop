@@ -188,7 +188,20 @@
         <button type="button" data-knowledge-tab="materials">◆ Материалы <b id="knowledge-tab-count">0</b></button>
       </nav>
       <section class="space-chat-panel" id="space-chat-panel">
-        <div class="space-chat-feed" id="space-chat-feed" aria-live="polite"></div>
+        <div class="space-chat-controls" aria-label="Отображение и стиль ответов">
+          <div class="space-chat-scale" role="group" aria-label="Масштаб текста чата" title="Можно также удерживать Ctrl и крутить колесо мыши над чатом">
+            <button type="button" id="space-chat-scale-down" aria-label="Уменьшить текст">A−</button>
+            <button type="button" id="space-chat-scale-value" aria-label="Сбросить масштаб текста до 100%" title="Сбросить масштаб">100%</button>
+            <button type="button" id="space-chat-scale-up" aria-label="Увеличить текст">A+</button>
+          </div>
+          <label>Ответы
+            <select id="space-chat-verbosity" aria-label="Подробность ответов">
+              <option value="short">Коротко</option><option value="balanced" selected>Обычно</option><option value="detailed">Подробно</option>
+            </select>
+          </label>
+          <span class="space-chat-format-hint">Выделите текст для форматирования</span>
+        </div>
+        <div class="space-chat-feed" id="space-chat-feed" role="log" aria-label="История чата" aria-live="polite" aria-relevant="additions text" aria-atomic="false"></div>
         <div class="space-chat-suggestions" id="space-chat-suggestions">
           <button type="button" data-space-prompt="Расскажи кратко, какая информация есть в этом пространстве.">Что здесь есть?</button>
           <button type="button" data-space-prompt="Создай карточки из всей информации пространства. Охвати все содержательные темы без повторов.">Карточки из всего</button>

@@ -76,7 +76,15 @@ assert.match(app, /function workspaceKnowledge/, 'Knowledge must be scoped to th
 assert.match(app, /function workspaceContextEntries[\s\S]{0,2600}knowledge\.items[\s\S]{0,2600}space\.cards/, 'Workspace chat context must combine hub materials with every board card');
 assert.match(app, /function rankWorkspaceEntries[\s\S]{0,2600}wantsSpokenReply[\s\S]{0,2600}score/, 'Workspace chat must rank conversational situations before calling an AI provider');
 assert.match(app, /function buildSpaceChatContext[\s\S]{0,2200}120000[\s\S]{0,2200}РЕЛЕВАНТНЫЕ МАТЕРИАЛЫ/, 'Workspace chat must send a compact relevance-ranked packet instead of the entire board');
-assert.match(app, /function localSpaceChatAnswer[\s\S]{0,1800}материалы пространства/, 'Relevant workspace material must remain usable when every AI provider is unavailable');
+assert.match(app, /function localSpaceChatAnswer[\s\S]{0,2600}локальный синтез/, 'Relevant workspace material must remain usable as a synthesized answer when every AI provider is unavailable');
+assert.doesNotMatch(app, /У матеріалах є готова відповідь|В материалах есть готовый ответ/, 'Workspace fallback must never expose a raw top-card dump as an assistant answer');
+assert.match(app, /function inferSpaceChatIntent[\s\S]{0,1200}(?:приклад|пример)[\s\S]{0,300}dialogue/, 'Workspace chat must classify example-dialogue requests explicitly');
+assert.match(main, /Материалы — это доказательства и строительные блоки[\s\S]{0,1000}Не копируй один источник целиком/, 'Workspace generation must synthesize from evidence instead of imitating card lookup');
+assert.match(main, /function isWeakGeneratedSpaceAnswer[\s\S]{0,4000}turns\.length < 6/, 'Weak, short, or non-alternating dialogue answers must be detected structurally');
+assert.match(main, /КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ/, 'Weak workspace answers must receive a corrective generation attempt');
+assert.match(main, /if \(jsonSchema\)[\s\S]{0,240}parseJsonText\(text\)[\s\S]{0,260}invalid_json/, 'Malformed structured output must fall through to another AI provider');
+assert.match(main, /excludeProviders[\s\S]{0,1200}excludedProviders[\s\S]{0,500}alternatives/, 'Semantic repair must be able to skip the provider that returned a weak answer');
+assert.match(main, /parsedAnswer = value => \{[\s\S]{0,500}value\?\.answer \?\? value\?\.content[\s\S]{0,900}value\?\.dialogue/, 'Workspace chat must normalize common non-strict JSON answer aliases and dialogue arrays from fallback providers');
 assert.match(app, /function publishSpaceChatCards[\s\S]{0,1200}space\.cards\.unshift/, 'Workspace chat must be able to publish generated cards onto the current board');
 assert.match(app, /analyzeKnowledgeImage/, 'Pasted images must be analyzed instead of becoming unstructured clutter');
 assert.match(app, /ДОКАЗОВИЙ ПАКЕТ ІЗ БАЗИ ЗНАНЬ/, 'Live AI context must include the current workspace knowledge base');
@@ -92,7 +100,110 @@ assert.match(app, /const occupied = cards\.filter/, 'New cards must be placed ag
 assert.match(app, /maybeStructureLiveConversation/, 'Long conversations must be periodically summarized during recording');
 assert.match(app, /transcript-details/, 'Full transcripts must be collapsed behind a disclosure control');
 assert.match(html, /id="rich-text-toolbar"/, 'Selected text must expose a formatting toolbar');
+assert.match(html, /id="space-chat-scale-down"[\s\S]{0,400}id="space-chat-scale-value"[\s\S]{0,400}id="space-chat-scale-up"/, 'Workspace chat must expose accessible text-scale controls');
+assert.match(html, /id="space-chat-verbosity"[\s\S]{0,300}value="short"[\s\S]{0,300}value="balanced"[\s\S]{0,300}value="detailed"/, 'Workspace chat must expose persistent answer-length choices');
+assert.match(html, /id="space-chat-feed"[^>]*role="log"[^>]*aria-live="polite"/, 'New workspace-chat answers must be announced without interrupting the user');
+assert.match(css, /\.space-chat-panel\s*\{[^}]*--chat-text-scale:\s*1/, 'Chat text scaling must use a scoped CSS variable instead of zooming the whole application');
+assert.match(css, /\.space-chat-message-text[^}]*user-select:\s*text/, 'Chat answer text must remain selectable for copying and formatting');
+assert.match(app, /spaceChatPanel\?\.addEventListener\('wheel'[\s\S]{0,700}event\.preventDefault\(\)[\s\S]{0,700}passive:false/, 'Ctrl+wheel must change only chat text scale and suppress Electron page zoom');
+assert.match(app, /knowledgeDialog\.appendChild\(richTextToolbar\)/, 'The chat formatting toolbar must join the modal top layer before it becomes interactive');
+assert.match(app, /knowledge\.chat\.filter\(item => !\['preference','preference_ack'\]\.includes\(item\.kind\)\)/, 'Preference-only commands must never pollute model conversation history');
+assert.match(main, /const safePreferences = \{[\s\S]{0,500}\['short','balanced','detailed'\]/, 'Answer preferences must be validated separately from workspace evidence');
+assert.match(main, /ПРЕДПОЧТЕНИЯ ОТВЕТА: \$\{verbosityRule\} \$\{formatRule\}/, 'Validated answer preferences must become trusted model instructions');
 assert.match(css, /recording-active \.live-outline-panel/, 'Floating live panels must not duplicate workspace cards during recording');
+
+const chatFormatStart = app.indexOf('const CHAT_FORMAT_FONTS');
+const chatFormatEnd = app.indexOf('function normalizeWorkspaces', chatFormatStart);
+const chatFormatContext = {
+  escapeHtml:value => String(value || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
+};
+vm.runInNewContext(`${app.slice(chatFormatStart, chatFormatEnd)}; this.normalizePreferences=normalizeSpaceChatPreferences; this.normalizeFormats=normalizeChatFormats; this.applyRanges=applyChatFormatRanges; this.toggle=toggleChatFormatRangeProperty; this.markup=chatFormattedTextMarkup;`, chatFormatContext);
+assert.equal(chatFormatContext.normalizePreferences({ textScale:'broken' }).textScale, 100, 'Corrupt saved scale values must recover to 100%');
+assert.equal(chatFormatContext.normalizePreferences({ textScale:17 }).textScale, 80, 'Chat scale must remain readable at its lower boundary');
+assert.equal(chatFormatContext.normalizePreferences({ textScale:999 }).textScale, 200, 'Chat scale must stay inside its upper boundary');
+assert.equal(chatFormatContext.normalizePreferences({ verbosity:'anything' }).verbosity, 'balanced', 'Unknown verbosity values must not enter the trusted preference payload');
+const safeRanges = chatFormatContext.applyRanges([], 11, 0, 5, { bold:true, font:'georgia', color:'#12ABef' });
+assert.match(chatFormatContext.markup({ text:'Hello world', formats:safeRanges }), /class="chat-format-bold chat-format-font-georgia" style="color:#12abef">Hello<\/span> world/, 'A safe range must render formatting without changing message text');
+const clearedRanges = chatFormatContext.applyRanges(safeRanges, 11, 2, 4, null);
+assert.equal(JSON.stringify(clearedRanges), JSON.stringify([{ start:0, end:2, style:{ bold:true, font:'georgia', color:'#12abef' } }, { start:4, end:5, style:{ bold:true, font:'georgia', color:'#12abef' } }]), 'Clearing a subrange must preserve formatting on both sides');
+assert.equal(chatFormatContext.normalizeFormats([{ start:0, end:5, style:{ font:'url(javascript:1)', color:'red' } }], 5).length, 0, 'Untrusted fonts and CSS colors must be discarded');
+assert.doesNotMatch(chatFormatContext.markup({ text:'<img src=x onerror=alert(1)>', formats:[] }), /<img/i, 'Chat message rendering must escape stored text instead of trusting HTML');
+const toggledOff = chatFormatContext.toggle([{ start:0, end:5, style:{ bold:true, color:'#123456' } }], 5, 0, 5, 'bold');
+assert.equal(JSON.stringify(toggledOff), JSON.stringify([{ start:0, end:5, style:{ color:'#123456' } }]), 'Pressing a format button again must remove only that property');
+
+const chatPreferenceStart = app.indexOf('function parseSpaceChatPreferenceCommand');
+const chatPreferenceEnd = app.indexOf('function workspaceRelevantExcerpt', chatPreferenceStart);
+const chatPreferenceContext = {};
+vm.runInNewContext(`${app.slice(chatPreferenceStart, chatPreferenceEnd)}; this.parse=parseSpaceChatPreferenceCommand;`, chatPreferenceContext);
+assert.equal(JSON.stringify(chatPreferenceContext.parse('Отвечай покороче если что')), JSON.stringify({ kind:'pure', patch:{ verbosity:'short' }, turnPatch:{}, taskText:'' }), 'A natural brevity command must be stored locally without calling the model');
+assert.equal(chatPreferenceContext.parse('Отвечай короче и расскажи про цену').taskText, 'расскажи про цену', 'A mixed preference and question must send only the semantic task to retrieval and AI');
+assert.equal(chatPreferenceContext.parse('Коротко: объясни цену').kind, 'turn', 'One-turn brevity wording must not overwrite the persistent preference');
+assert.equal(chatPreferenceContext.parse('Что значит отвечай короче?').kind, 'none', 'Discussing a preference phrase must not accidentally change settings');
+assert.equal(chatPreferenceContext.parse('Відповідай коротше').patch.verbosity, 'short', 'Natural Ukrainian brevity commands must be supported');
+assert.equal(chatPreferenceContext.parse('Отвечай короче и дай цену').taskText, 'дай цену', 'Short mixed commands must not discard a task introduced with «дай»');
+assert.equal(chatPreferenceContext.parse('Отвечай короче, объясни цену').taskText, 'объясни цену', 'A comma must be accepted as the boundary between a preference and a task');
+assert.equal(chatPreferenceContext.parse('Пиши рассказ короче предыдущего').kind, 'none', 'Ordinary writing requests containing «короче» must not become preference commands');
+assert.equal(chatPreferenceContext.parse('Переведи фразу сбрось настройки').kind, 'none', 'Mentioning a reset phrase inside another task must not reset chat settings');
+assert.equal(chatPreferenceContext.parse('Отвечай короче и сделай пример диалога').taskText, 'сделай пример диалога', 'Mixed preference commands must preserve tasks beyond a fixed verb allowlist');
+assert.equal(chatPreferenceContext.parse('Отвечай короче, но объясни цену').taskText, 'объясни цену', 'Contrast conjunctions must separate a preference from its real task');
+assert.equal(JSON.stringify(chatPreferenceContext.parse('Отвечай короче и без списков').patch), JSON.stringify({ verbosity:'short', format:'paragraphs' }), 'One command may update several compatible answer preferences');
+
+const spaceChatLogicStart = app.indexOf('function workspaceCardText');
+const spaceChatLogicEnd = app.indexOf('function importMeetingToKnowledge', spaceChatLogicStart);
+const spaceChatContext = {
+  htmlToWorkspaceText:value => String(value || '').replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ''),
+  workspaceKnowledge:space => space.knowledge,
+  activeSpace:() => null,
+  dedupeStrings:values => [...new Set(values)],
+  normalizeSpaceChatPreferences:value => ({ verbosity:['short','detailed'].includes(value?.verbosity) ? value.verbosity : 'balanced', format:['paragraphs','bullets'].includes(value?.format) ? value.format : 'auto', language:'auto', textScale:100 })
+};
+vm.runInNewContext(`${app.slice(spaceChatLogicStart, spaceChatLogicEnd)}; this.intent=inferSpaceChatIntent; this.resolveIntent=resolveSpaceChatIntent; this.rank=rankWorkspaceEntries; this.answer=localSpaceChatAnswer; this.packet=buildSpaceChatContext;`, spaceChatContext);
+const dialogueFixture = {
+  title:'Антишкола', knowledge:{ items:[], facts:[], tags:[], playbook:[], summary:'' }, cards:[
+    { id:'algorithm', kicker:'01 · Алгоритм', title:'4 кроки', knowledgeText:'Приєднання: «Розумію вас»\nУточнення: «Що саме вас бентежить?»\nАргумент: відповідь під потребу\nЗаклик: «Сьогодні чи завтра?»' },
+    { id:'not-interested', kicker:'02 · Заперечення', title:'«Не цікаво / Не актуально»', knowledgeText:'Це хибне заперечення.\nУточнення: «Підкажіть, уже займаєтесь десь? Чи просто немає часу?»' },
+    { id:'already', kicker:'03 · Заперечення', title:'«Вже займаюся»', knowledgeText:'Приєднання: «Дуже круто, що розвиваєте англійську!»\nУточнення: «В якому форматі? Чого не вистачає? Яка мета?»\nАргумент: «Студент говорить 50–70% уроку».\nЗаклик: «На який день зручніше — сьогодні чи завтра?»' },
+    { id:'dialogue', kicker:'20 · Приклад', title:'Повний діалог · приклад', knowledgeText:'Т — менеджер, К — клієнт\nК: «Не актуально».\nТ: «Розумію. Уже займаєтесь десь або просто немає часу?»\nК: «Займаюсь, але мало розмовної практики».\nТ: «Дуже круто! В якому форматі займаєтесь?»\nК: «У групі».\nТ: «Чого бракує і якої мети хочете досягти?»\nК: «Хочу вільно говорити».\nТ: «У нас студент говорить 50–70% уроку».\nТ: «Спробуєте пробний сьогодні чи завтра?»' },
+    { id:'price', kicker:'05 · Заперечення', title:'«Дорого»', knowledgeText:'Приєднання: «Фінансове питання важливе».\nУточнення: «З чим порівнюєте?»\nАргумент: «299 гривень за урок, студент говорить 50–70% часу».\nЗаклик: «Порівняємо наповнення?»' }
+  ]
+};
+const screenshotQuery = 'не цікаво НЕАКТУАЛЬНО. Приклад діалога';
+assert.equal(spaceChatContext.intent(screenshotQuery), 'dialogue', 'The exact reported mixed-language request must be understood as dialogue generation');
+assert.match(spaceChatContext.rank(dialogueFixture, screenshotQuery)[0].title, /діалог/i, 'Dialogue evidence must outrank a literal objection-title match for a dialogue task');
+const offlineDialogue = spaceChatContext.answer(dialogueFixture, screenshotQuery)?.text || '';
+assert.ok((offlineDialogue.match(/(?:^|\n)\s*(?:Т|М|К):/g) || []).length >= 6, 'Offline fallback must return a multi-turn dialogue');
+assert.doesNotMatch(offlineDialogue, /готова відповідь|02 · Заперечення|РЕЛЕВАНТНЫЕ МАТЕРИАЛЫ/i, 'Offline fallback must not leak a card title or retrieval packet');
+const offlineRoles = [...offlineDialogue.matchAll(/(?:^|\n)\s*([ТМК]):/g)].map(match => match[1] === 'К' ? 'client' : 'manager');
+assert.ok(offlineRoles.every((role, index) => index === 0 || role !== offlineRoles[index - 1]), 'Offline dialogue roles must alternate naturally');
+assert.notEqual(offlineDialogue.includes(dialogueFixture.cards.find(card => card.id === 'dialogue').knowledgeText), true, 'Offline dialogue must be newly assembled instead of copying the full-dialogue card');
+assert.match(spaceChatContext.packet(dialogueFixture, screenshotQuery), /Тип задачи: dialogue[\s\S]*Повний діалог[\s\S]*(?:4 кроки|Не цікаво)/, 'AI context must combine dialogue evidence with supporting scenario material');
+assert.equal(spaceChatContext.intent('Покажи пример разговора целиком'), 'dialogue', 'Russian paraphrases must resolve to the same dialogue intent');
+assert.equal(spaceChatContext.intent('Зроби діалог про заперечення'), 'dialogue', 'Natural Ukrainian dialogue commands must be recognized');
+assert.equal(spaceChatContext.intent('Сделай диалог о цене'), 'dialogue', 'Natural Russian dialogue commands must be recognized');
+assert.equal(spaceChatContext.intent('Клієнт каже, що це дорого'), 'draft_response', 'A reported client objection must request a ready response');
+assert.equal(spaceChatContext.resolveIntent('Какая цена?', 'Покажи пример диалога'), 'answer', 'A new factual question must replace the prior dialogue intent');
+assert.equal(spaceChatContext.resolveIntent('А теперь целиком', 'Покажи пример диалога'), 'dialogue', 'An explicitly dependent follow-up must inherit the prior dialogue intent');
+assert.match(spaceChatContext.rank(dialogueFixture, 'Сделай диалог о цене', 'dialogue')[0].title, /Дорого/, 'Dialogue-format evidence must not outrank a different requested topic');
+assert.match(spaceChatContext.rank(dialogueFixture, 'Зроби діалог про ціну', 'dialogue')[0].title, /Дорого/, 'A same-language full-dialogue card must not outrank the requested topic');
+assert.doesNotMatch(spaceChatContext.answer(dialogueFixture, 'Сделай диалог о цене', 'dialogue')?.text || '', /Вот цельный|Например|Понятно/, 'Offline dialogue framing must stay in the language of the retrieved source phrases');
+assert.match(spaceChatContext.answer(dialogueFixture, 'Сколько стоит урок?')?.text || '', /299[\s\S]*50–70%/, 'Offline synthesis must preserve leading numbers and percentages');
+assert.equal(spaceChatContext.answer(dialogueFixture, 'Кто директор компании?'), null, 'Unknown factual questions must not fall back to an arbitrary card');
+assert.equal(spaceChatContext.answer(dialogueFixture, 'Кто автор 4 кроки?'), null, 'Partial title overlap must not fabricate an unknown author from unrelated card content');
+
+const mainSpaceChatLogicStart = main.indexOf('  function inferSpaceChatTask');
+const mainSpaceChatLogicEnd = main.indexOf("  handleTrusted('space:chat'", mainSpaceChatLogicStart);
+const mainSpaceChatContext = {};
+vm.runInNewContext(`${main.slice(mainSpaceChatLogicStart, mainSpaceChatLogicEnd)}; this.intent=inferSpaceChatTask; this.weak=isWeakGeneratedSpaceAnswer;`, mainSpaceChatContext);
+assert.equal(mainSpaceChatContext.intent('Какая цена?', [{ role:'user', text:'Создай карточки по теме' }]), 'answer', 'Backend must never inherit a mutating card-creation intent into a new question');
+assert.equal(mainSpaceChatContext.intent('Какая цена?', [{ role:'user', text:'Покажи пример диалога' }]), 'answer', 'Backend must classify a complete new question independently from history');
+assert.equal(mainSpaceChatContext.intent('А теперь целиком', [{ role:'user', text:'Покажи пример диалога' }]), 'dialogue', 'Backend may inherit intent only for an explicitly dependent follow-up');
+assert.equal(mainSpaceChatContext.intent('А теперь целиком', [{ role:'user', text:'Покажи пример диалога' }, { role:'user', text:'Какая цена?' }]), 'answer', 'A dependent follow-up must inherit only the immediately previous user topic');
+assert.equal(mainSpaceChatContext.weak('В материалах недостаточно информации, чтобы назвать директора.', 'answer', ''), false, 'An honest unknown-fact answer must not be repaired into a hallucination');
+assert.equal(mainSpaceChatContext.weak('М: Один\nК: Два\nМ: Три\nК: Четыре\nМ: Пять', 'dialogue', ''), true, 'A five-turn dialogue must fail the quality gate');
+assert.equal(mainSpaceChatContext.weak('М: Один\nК: Два\nМ: Три\nК: Четыре\nМ: Пять\nК: Шесть', 'dialogue', ''), false, 'A six-turn alternating dialogue must pass the structural quality gate');
+assert.equal(mainSpaceChatContext.weak('М: Один\nМ: Два\nК: Три\nМ: Четыре\nК: Пять\nМ: Шесть', 'dialogue', ''), true, 'Repeated speaker roles must fail the structural quality gate');
+assert.equal(mainSpaceChatContext.weak('М: Мене звати Олена\nК: Два\nМ: Три\nК: Чотири\nМ: П’ять\nК: +380 67 123 4567', 'dialogue', ''), true, 'Dialogue validation must reject invented personal data');
+assert.equal(mainSpaceChatContext.weak('Карточка «02 · Возражение»: Приєднання, уточнення, аргумент і заклик.', 'answer', ''), true, 'Provider answers must not leak a raw card label in alternative punctuation');
 assert.match(app, /function appendLiveUtterance/, 'Mic and system transcripts must be deduplicated before entering the conversation');
 assert.match(app, /function sanitizeRecap/, 'Summary sections must remove duplicate points and questions');
 assert.match(css, /source-tracks label span \{ color:#526171/, 'Audio source labels must remain readable in the light theme');
@@ -463,7 +574,7 @@ assert.match(main, /responseMimeType:'application\/json'[\s\S]{0,80}responseSche
 assert.match(main, /spaceChatContextChars: 160000/, 'Workspace chat IPC must reject accidentally oversized context packets');
 assert.match(main, /const initialContextChars = Math\.min\(120000[\s\S]{0,180}sendRequest\(30000\)/, 'Workspace chat must use a compact packet and a bounded retry after provider input limits');
 assert.doesNotMatch(app, /slice\(0,900000\)/, 'Workspace chat must never send the entire unranked board to a provider');
-assert.match(main, /handleTrusted\('space:chat'[\s\S]{0,5000}action="create_cards"[\s\S]{0,5000}schemaName:'space_chat'/, 'The protected workspace chat endpoint must distinguish answers from card-creation commands');
+assert.match(main, /handleTrusted\('space:chat'[\s\S]{0,10000}action="create_cards"[\s\S]{0,10000}schemaName:'space_chat'/, 'The protected workspace chat endpoint must distinguish answers from card-creation commands');
 assert.match(main, /completion\.reason === 'http_413'[\s\S]{0,260}buildUserPrompt\(4000\)/, 'Oversized live suggestions must retry with a much smaller evidence packet');
 assert.match(html, /id="ai-key-add-field"/, 'AI settings must let the user add multiple provider keys');
 assert.match(html, /placeholder="csk-…, xai-…, AQ\. … \/ AIza… или gsk_…"|placeholder="csk-…, xai-…, AQ\.\.\. \/ AIza… или gsk_…"|placeholder="csk-…, xai-…, AQ.… \/ AIza… или gsk_…"/, 'AI settings must accept Gemini keys alongside Cerebras, xAI, and Groq');
