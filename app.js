@@ -932,9 +932,90 @@ function activeSpace() {
   return workspaces.find(space => space.id === activeSpaceId) || workspaces[0];
 }
 
+let googleSheetsSyncTimer = null;
+let googleSheetsSyncInFlight = false;
+let googleSheetsSyncPending = false;
+let googleSheetsSyncFailureShown = false;
+
+function googleSheetsText(value, maxLength = 45000) {
+  const text = String(value || '');
+  return text.length <= maxLength ? text : `${text.slice(0, maxLength - 40)}\n… сокращено для Google Таблиц …`;
+}
+
+function googleSheetsSnapshot() {
+  return {
+    schemaVersion:1,
+    generatedAt:Date.now(),
+    workspaces:workspaces.map(space => ({
+      id:space.id,
+      title:googleSheetsText(space.title, 500),
+      glyph:googleSheetsText(space.glyph, 20),
+      cards:(space.cards || []).map(card => ({
+        id:googleSheetsText(card.id, 200), createdAt:card.createdAt, type:card.type, size:card.size,
+        accent:card.accent, kicker:googleSheetsText(card.kicker, 500), title:googleSheetsText(card.title, 1000),
+        content:googleSheetsText(card.content),
+        items:Array.isArray(card.items) ? card.items.slice(0,500).map(item => ({ text:googleSheetsText(item.text, 5000), checked:Boolean(item.checked) })) : undefined,
+        people:Array.isArray(card.people) ? card.people.slice(0,500).map(item => ({ name:googleSheetsText(item.name, 1000), role:googleSheetsText(item.role, 1000) })) : undefined,
+        links:Array.isArray(card.links) ? card.links.slice(0,100).map(item => ({ label:googleSheetsText(item.label, 2000), url:googleSheetsText(item.url, 5000) })) : undefined,
+        src:googleSheetsText(card.src, 5000), linkUrl:googleSheetsText(card.linkUrl, 5000),
+        transcript:googleSheetsText(card.transcript), structured:card.structured,
+        suggestedAnswer:googleSheetsText(card.suggestedAnswer), knowledgeText:googleSheetsText(card.knowledgeText),
+        duration:card.duration, meetingState:card.meetingState
+      })),
+      knowledge:{
+        summary:googleSheetsText(space.knowledge?.summary), revision:Number(space.knowledge?.revision || 0),
+        facts:Array.isArray(space.knowledge?.facts) ? space.knowledge.facts.slice(0,1000).map(value => googleSheetsText(value, 5000)) : [],
+        tags:Array.isArray(space.knowledge?.tags) ? space.knowledge.tags.slice(0,1000).map(value => googleSheetsText(value, 500)) : [],
+        playbook:Array.isArray(space.knowledge?.playbook) ? space.knowledge.playbook.slice(0,1000).map(item => ({ cue:googleSheetsText(item?.cue, 5000), response:googleSheetsText(item?.response, 10000) })) : [],
+        items:Array.isArray(space.knowledge?.items) ? space.knowledge.items.slice(0,2000).map(item => ({
+          id:googleSheetsText(item?.id, 200), type:item?.type, title:googleSheetsText(item?.title, 1000),
+          text:googleSheetsText(item?.text), summary:googleSheetsText(item?.summary),
+          facts:Array.isArray(item?.facts) ? item.facts.slice(0,500).map(value => googleSheetsText(value, 5000)) : [],
+          tags:Array.isArray(item?.tags) ? item.tags.slice(0,500).map(value => googleSheetsText(value, 500)) : [],
+          imageSrc:googleSheetsText(item?.imageSrc, 5000), status:item?.status, createdAt:item?.createdAt,
+          sourceCardId:googleSheetsText(item?.sourceCardId, 200)
+        })) : []
+      }
+    }))
+  };
+}
+
+async function flushGoogleSheetsSync() {
+  googleSheetsSyncTimer = null;
+  if (!window.sloy?.syncGoogleSheets) return;
+  if (googleSheetsSyncInFlight) { googleSheetsSyncPending = true; return; }
+  googleSheetsSyncInFlight = true;
+  try {
+    const result = await window.sloy.syncGoogleSheets(googleSheetsSnapshot());
+    if (!result?.ok && !googleSheetsSyncFailureShown) {
+      googleSheetsSyncFailureShown = true;
+      showToast(result?.reason === 'python_not_found' ? 'Google Таблицы: Python не найден' : 'Не удалось синхронизировать Google Таблицы · локальные данные сохранены', { duration:6000 });
+    }
+    if (result?.ok) googleSheetsSyncFailureShown = false;
+  } catch {
+    if (!googleSheetsSyncFailureShown) {
+      googleSheetsSyncFailureShown = true;
+      showToast('Не удалось синхронизировать Google Таблицы · локальные данные сохранены', { duration:6000 });
+    }
+  } finally {
+    googleSheetsSyncInFlight = false;
+    if (googleSheetsSyncPending) {
+      googleSheetsSyncPending = false;
+      googleSheetsSyncTimer = setTimeout(flushGoogleSheetsSync, 250);
+    }
+  }
+}
+
+function scheduleGoogleSheetsSync(delay = 1200) {
+  if (!window.sloy?.syncGoogleSheets) return;
+  clearTimeout(googleSheetsSyncTimer);
+  googleSheetsSyncTimer = setTimeout(flushGoogleSheetsSync, delay);
+}
+
 function persistWorkspaces() {
   const spacesSaved = safeJsonStorageSet(SPACES_KEY, workspaces);
   const activeSpaceSaved = safeStorageSet(ACTIVE_SPACE_KEY, activeSpaceId);
+  if (spacesSaved && activeSpaceSaved) scheduleGoogleSheetsSync();
   return spacesSaved && activeSpaceSaved;
 }
 
@@ -5088,8 +5169,95 @@ const aiSettingsDialog = document.getElementById('ai-settings-dialog');
 const aiKeyStatus = document.getElementById('ai-key-status');
 const aiKeyList = document.getElementById('ai-key-list');
 const aiKeyInputs = document.getElementById('ai-key-inputs');
+const globalShortcutInput = document.getElementById('global-shortcut');
+const googleSheetsEnabledInput = document.getElementById('google-sheets-enabled');
+const googleSheetsUrlInput = document.getElementById('google-sheets-url');
+const googleSheetsCredentialsInput = document.getElementById('google-sheets-credentials');
+const googleDriveOauthClientInput = document.getElementById('google-drive-oauth-client');
+const googleDriveShareImagesInput = document.getElementById('google-drive-share-images');
+const googleSheetsStatus = document.getElementById('google-sheets-status');
 const aiKeyVerificationTimers = new WeakMap();
 let aiKeyStatusTimer = null;
+
+async function loadGoogleSheetsSetting() {
+  try {
+    const result = await window.sloy?.getGoogleSheetsConfig?.();
+    const config = result?.config || {};
+    googleSheetsEnabledInput.checked = Boolean(config.enabled);
+    googleSheetsUrlInput.value = config.spreadsheetUrl || config.spreadsheetId || '';
+    googleSheetsCredentialsInput.value = config.credentialsPath || '';
+    googleDriveOauthClientInput.value = config.driveOauthClientPath || '';
+    googleDriveShareImagesInput.checked = Boolean(config.shareImagesByLink);
+    googleSheetsStatus.textContent = config.enabled ? 'Подключено на этом компьютере' : 'Подключение хранится только на этом компьютере';
+  } catch {
+    googleSheetsStatus.textContent = 'Не удалось прочитать локальную настройку';
+  }
+}
+
+function shortcutDisplayLabel(accelerator = '') {
+  return String(accelerator).split('+').filter(Boolean).map(part => part === 'Control' ? 'Ctrl' : part === 'Super' ? 'Win' : part).join(' + ');
+}
+
+async function loadGlobalShortcutSetting() {
+  if (!globalShortcutInput) return;
+  try {
+    const result = await window.sloy?.getGlobalShortcut?.();
+    const accelerator = result?.accelerator || 'Control+Alt+Space';
+    globalShortcutInput.dataset.accelerator = accelerator;
+    globalShortcutInput.value = result?.label || shortcutDisplayLabel(accelerator);
+    globalShortcutInput.setCustomValidity('');
+  } catch {
+    globalShortcutInput.dataset.accelerator = 'Control+Alt+Space';
+    globalShortcutInput.value = 'Ctrl + Alt + Space';
+  }
+}
+
+function shortcutKeyFromEvent(event) {
+  if (/^Key[A-Z]$/.test(event.code)) return event.code.slice(3);
+  if (/^Digit[0-9]$/.test(event.code)) return event.code.slice(5);
+  if (/^F(?:[1-9]|1\d|2[0-4])$/.test(event.code)) return event.code;
+  return {
+    Space:'Space', Enter:'Enter', Tab:'Tab', Backspace:'Backspace', Delete:'Delete', Insert:'Insert',
+    Home:'Home', End:'End', PageUp:'PageUp', PageDown:'PageDown', ArrowUp:'Up', ArrowDown:'Down', ArrowLeft:'Left', ArrowRight:'Right'
+  }[event.code] || '';
+}
+
+globalShortcutInput?.addEventListener('focus', () => {
+  globalShortcutInput.value = 'Нажмите новое сочетание…';
+  globalShortcutInput.setCustomValidity('');
+  void window.sloy?.startShortcutCapture?.();
+});
+globalShortcutInput?.addEventListener('blur', () => {
+  if (!globalShortcutInput.dataset.accelerator) globalShortcutInput.dataset.accelerator = 'Control+Alt+Space';
+  globalShortcutInput.value = shortcutDisplayLabel(globalShortcutInput.dataset.accelerator);
+  void window.sloy?.stopShortcutCapture?.();
+});
+globalShortcutInput?.addEventListener('keydown', event => {
+  event.preventDefault();
+  event.stopPropagation();
+  if (event.code === 'Escape') { globalShortcutInput.blur(); return; }
+  const modifiers = [event.ctrlKey && 'Control', event.altKey && 'Alt', event.shiftKey && 'Shift', event.metaKey && 'Super'].filter(Boolean);
+  const key = shortcutKeyFromEvent(event);
+  if (!key) {
+    globalShortcutInput.value = modifiers.length ? `${shortcutDisplayLabel(modifiers.join('+'))} + …` : 'Нажмите новое сочетание…';
+    return;
+  }
+  const functionKey = /^F(?:[1-9]|1\d|2[0-4])$/.test(key);
+  if (!functionKey && !modifiers.some(modifier => ['Control','Alt','Super'].includes(modifier))) {
+    globalShortcutInput.setCustomValidity('Добавьте Ctrl, Alt или Win');
+    globalShortcutInput.reportValidity();
+    return;
+  }
+  const accelerator = [...modifiers, key].join('+');
+  globalShortcutInput.dataset.accelerator = accelerator;
+  globalShortcutInput.value = shortcutDisplayLabel(accelerator);
+  globalShortcutInput.setCustomValidity('');
+});
+document.getElementById('global-shortcut-reset')?.addEventListener('click', () => {
+  globalShortcutInput.dataset.accelerator = 'Control+Alt+Space';
+  globalShortcutInput.value = 'Ctrl + Alt + Space';
+  globalShortcutInput.setCustomValidity('');
+});
 
 function aiKeyInputRowMarkup(removable = false) {
   return `<input class="ai-api-key" type="password" autocomplete="off" placeholder="csk-…, xai-…, AQ.… / AIza… или gsk_…"><button type="button" class="ai-key-input-remove" aria-label="Убрать поле" ${removable ? '' : 'hidden'}>×</button><small class="ai-key-inline-status" aria-live="polite">Ключ будет проверен автоматически</small>`;
@@ -5222,6 +5390,8 @@ document.getElementById('ai-settings-toggle')?.addEventListener('click', () => {
   document.getElementById('xai-internet-search').checked = settings.internetSearch;
   document.getElementById('xai-auto-structure').checked = settings.autoStructure;
   document.getElementById('transcription-language').value = settings.transcriptionLanguage || 'auto';
+  void loadGlobalShortcutSetting();
+  void loadGoogleSheetsSetting();
   resetAiKeyInputFields();
   document.getElementById('azure-speech-key').value = '';
   if (!aiSettingsDialog.open) aiSettingsDialog.showModal();
@@ -5232,6 +5402,7 @@ document.getElementById('ai-settings-toggle')?.addEventListener('click', () => {
 aiSettingsDialog?.addEventListener('close', () => {
   clearInterval(aiKeyStatusTimer);
   aiKeyStatusTimer = null;
+  void window.sloy?.stopShortcutCapture?.();
 });
 
 document.getElementById('ai-settings-form')?.addEventListener('submit', async event => {
@@ -5241,6 +5412,16 @@ document.getElementById('ai-settings-form')?.addEventListener('submit', async ev
   submitter.disabled = true;
   aiSettingsDialog.setAttribute('aria-busy', 'true');
   try {
+    const shortcutResult = await window.sloy?.setGlobalShortcut?.(globalShortcutInput?.dataset.accelerator || 'Control+Alt+Space');
+    if (shortcutResult && !shortcutResult.ok) {
+      const current = shortcutResult.accelerator || 'Control+Alt+Space';
+      globalShortcutInput.dataset.accelerator = current;
+      globalShortcutInput.value = shortcutResult.label || shortcutDisplayLabel(current);
+      globalShortcutInput.setCustomValidity(shortcutResult.reason === 'unavailable' ? 'Это сочетание уже занято другой программой' : 'Выберите корректное сочетание');
+      globalShortcutInput.reportValidity();
+      showToast(shortcutResult.reason === 'unavailable' ? 'Сочетание занято · выберите другое' : 'Не удалось сохранить горячую клавишу');
+      return;
+    }
     const settings = {
       captureSystemAudio:document.getElementById('capture-system-audio').checked,
       autoTranscribe:document.getElementById('xai-auto-transcribe').checked,
@@ -5251,6 +5432,28 @@ document.getElementById('ai-settings-form')?.addEventListener('submit', async ev
       transcriptionLanguage:document.getElementById('transcription-language').value
     };
     safeJsonStorageSet('sloy.ai-settings', settings);
+    const sheetsResult = await window.sloy?.setGoogleSheetsConfig?.({
+      enabled:Boolean(googleSheetsEnabledInput?.checked),
+      spreadsheetUrl:googleSheetsUrlInput?.value,
+      credentialsPath:googleSheetsCredentialsInput?.value,
+      driveOauthClientPath:googleDriveOauthClientInput?.value,
+      shareImagesByLink:Boolean(googleDriveShareImagesInput?.checked)
+    });
+    if (sheetsResult && !sheetsResult.ok) {
+      const input = sheetsResult.reason === 'spreadsheet' ? googleSheetsUrlInput : googleSheetsCredentialsInput;
+      input?.setCustomValidity(sheetsResult.reason === 'spreadsheet' ? 'Укажите корректную ссылку или ID Google Таблицы' : 'Укажите путь к Credentials JSON');
+      input?.reportValidity();
+      showToast(sheetsResult.reason === 'spreadsheet' ? 'Проверьте ссылку на Google Таблицу' : 'Укажите файл доступа к Google Таблицам');
+      return;
+    }
+    googleSheetsUrlInput?.setCustomValidity('');
+    googleSheetsCredentialsInput?.setCustomValidity('');
+    if (sheetsResult?.config?.enabled) {
+      googleSheetsStatus.textContent = 'Подключено на этом компьютере';
+      scheduleGoogleSheetsSync(100);
+    } else {
+      googleSheetsStatus.textContent = 'Синхронизация выключена на этом компьютере';
+    }
     const azureKey = document.getElementById('azure-speech-key').value.trim();
     const azureRegion = document.getElementById('azure-speech-region').value.trim();
     if (azureKey) {
@@ -5273,7 +5476,7 @@ document.getElementById('ai-settings-form')?.addEventListener('submit', async ev
     resetAiKeyInputFields();
     document.getElementById('azure-speech-key').value = '';
     aiSettingsDialog.close();
-    showToast('Настройки AI сохранены');
+    showToast(sheetsResult?.config?.enabled ? 'Настройки сохранены · синхронизация запущена' : 'Настройки сохранены');
   } catch {
     showToast('Не удалось сохранить настройки AI · попробуйте ещё раз');
   } finally {
@@ -5554,3 +5757,4 @@ window.addEventListener('beforeunload', () => flushDebouncedSave(''));
 render();
 document.body.dataset.appReady = 'true';
 requestAnimationFrame(() => document.body.classList.add('visible'));
+scheduleGoogleSheetsSync(400);

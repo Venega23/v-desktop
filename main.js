@@ -25,12 +25,55 @@ function ffmpegExecOptions() {
   return { windowsHide:true, timeout:120000, maxBuffer:1024 * 1024, env };
 }
 
+function googleSheetsSyncScriptPath() {
+  const scriptPath = path.join(__dirname, 'scripts', 'google_sheets_sync.py');
+  return app.isPackaged ? scriptPath.replace(`${path.sep}app.asar${path.sep}`, `${path.sep}app.asar.unpacked${path.sep}`) : scriptPath;
+}
+
+async function syncGoogleSheetsSnapshot(payload) {
+  const config = await getGoogleSheetsConfig();
+  if (!config.enabled) return { ok:true, skipped:true, reason:'not_configured' };
+  const serialized = boundedString(JSON.stringify(payload || {}), 10 * 1024 * 1024);
+  if (serialized === null) return { ok:false, reason:'input_limit' };
+  const inputPath = path.join(app.getPath('temp'), `v-google-sheets-${process.pid}-${Date.now()}.json`);
+  try {
+    await fs.writeFile(inputPath, serialized, 'utf8');
+    const python = process.env.SLOY_PYTHON || 'python';
+    const syncArgs = [
+      googleSheetsSyncScriptPath(),
+      '--input', inputPath,
+      '--credentials', config.credentialsPath,
+      '--spreadsheet-id', config.spreadsheetId,
+      '--drive-oauth-client', config.driveOauthClientPath,
+      '--drive-token', config.driveTokenPath
+    ];
+    if (config.shareImagesByLink) syncArgs.push('--share-images-by-link');
+    const { stdout } = await execFileAsync(python, syncArgs, {
+      windowsHide:true,
+      timeout:300000,
+      maxBuffer:1024 * 1024,
+      env:{ ...process.env, PYTHONIOENCODING:'utf-8' }
+    });
+    const result = JSON.parse(String(stdout || '').trim() || '{}');
+    return result?.ok ? result : { ok:false, reason:'sync_failed' };
+  } catch (error) {
+    const reason = error?.code === 'ENOENT' ? 'python_not_found' : 'sync_failed';
+    console.error('[google-sheets-sync-failed]', reason, String(error?.stderr || error?.message || '').split(/\r?\n/)[0].slice(0,500));
+    return { ok:false, reason };
+  } finally {
+    await fs.rm(inputPath, { force:true }).catch(() => {});
+  }
+}
+
 let overlay;
 let answerWindow;
 let meetingWindow;
 let tray;
 let updateManager;
 let autoStartEnabled = false;
+const DEFAULT_OVERLAY_SHORTCUT = 'Control+Alt+Space';
+let overlayShortcut = DEFAULT_OVERLAY_SHORTCUT;
+let overlayShortcutCapturePaused = false;
 let isQuitting = false;
 let rendererReady = false;
 let pendingShow = false;
@@ -80,6 +123,52 @@ async function writePreferences(preferences) {
   await fs.rename(tempPath, filePath);
 }
 
+function spreadsheetIdFromValue(value) {
+  const text = String(value || '').trim();
+  const urlMatch = text.match(/\/spreadsheets\/d\/([A-Za-z0-9_-]{20,})/);
+  if (urlMatch) return urlMatch[1];
+  return /^[A-Za-z0-9_-]{20,}$/.test(text) ? text : '';
+}
+
+function normalizeGoogleSheetsConfig(value = {}) {
+  const spreadsheetId = spreadsheetIdFromValue(value.spreadsheetId || value.spreadsheetUrl);
+  const credentialsPath = String(value.credentialsPath || '').trim().slice(0,32768);
+  const driveOauthClientPath = String(value.driveOauthClientPath || '').trim().slice(0,32768);
+  return {
+    enabled:Boolean(value.enabled !== false && spreadsheetId && credentialsPath),
+    spreadsheetId,
+    spreadsheetUrl:spreadsheetId ? `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit` : '',
+    credentialsPath,
+    driveOauthClientPath,
+    shareImagesByLink:Boolean(value.shareImagesByLink)
+  };
+}
+
+async function getGoogleSheetsConfig() {
+  const preferences = await readPreferences();
+  const stored = normalizeGoogleSheetsConfig(preferences.googleSheets || {});
+  const environment = normalizeGoogleSheetsConfig({
+    enabled:true,
+    spreadsheetId:process.env.SLOY_GOOGLE_SHEETS_ID,
+    credentialsPath:process.env.SLOY_GOOGLE_SHEETS_CREDENTIALS,
+    driveOauthClientPath:process.env.SLOY_GOOGLE_DRIVE_OAUTH_CLIENT,
+    shareImagesByLink:process.env.SLOY_GOOGLE_DRIVE_SHARE_IMAGES === '1'
+  });
+  const selected = environment.enabled ? environment : stored;
+  return { ...selected, driveTokenPath:path.join(app.getPath('userData'), 'google-drive-oauth-token.json') };
+}
+
+async function setGoogleSheetsConfig(value = {}) {
+  const normalized = normalizeGoogleSheetsConfig(value);
+  if (value.enabled !== false && (!normalized.spreadsheetId || !normalized.credentialsPath)) {
+    return { ok:false, reason:!normalized.spreadsheetId ? 'spreadsheet' : 'credentials' };
+  }
+  const preferences = await readPreferences();
+  preferences.googleSheets = { ...normalized, enabled:Boolean(value.enabled !== false) };
+  await writePreferences(preferences);
+  return { ok:true, config:await getGoogleSheetsConfig() };
+}
+
 async function setAutoStart(enabled, { persist = true } = {}) {
   autoStartEnabled = Boolean(enabled) && process.platform === 'win32' && app.isPackaged;
   if (process.platform === 'win32' && app.isPackaged) {
@@ -103,6 +192,87 @@ async function initializeAutoStart() {
     await writePreferences(preferences);
   }
   await setAutoStart(enabled, { persist:false });
+}
+
+function normalizeShortcutAccelerator(value) {
+  const aliases = new Map([
+    ['ctrl','Control'], ['control','Control'], ['alt','Alt'], ['option','Alt'],
+    ['shift','Shift'], ['super','Super'], ['meta','Super'], ['win','Super'], ['windows','Super'], ['cmd','Super'], ['command','Super']
+  ]);
+  const keyAliases = new Map([
+    ['space','Space'], ['spacebar','Space'], ['enter','Enter'], ['return','Enter'], ['tab','Tab'],
+    ['backspace','Backspace'], ['delete','Delete'], ['insert','Insert'], ['home','Home'], ['end','End'],
+    ['pageup','PageUp'], ['pagedown','PageDown'], ['up','Up'], ['down','Down'], ['left','Left'], ['right','Right']
+  ]);
+  const modifiers = [];
+  let key = '';
+  for (const rawPart of String(value || '').split('+')) {
+    const part = rawPart.trim();
+    if (!part) continue;
+    const modifier = aliases.get(part.toLowerCase());
+    if (modifier) {
+      if (!modifiers.includes(modifier)) modifiers.push(modifier);
+      continue;
+    }
+    if (key) return '';
+    const lower = part.toLowerCase();
+    if (/^[a-z]$/i.test(part)) key = part.toUpperCase();
+    else if (/^[0-9]$/.test(part)) key = part;
+    else if (/^f(?:[1-9]|1\d|2[0-4])$/i.test(part)) key = part.toUpperCase();
+    else key = keyAliases.get(lower) || '';
+    if (!key) return '';
+  }
+  const hasPrimaryModifier = modifiers.some(modifier => ['Control','Alt','Super'].includes(modifier));
+  if (!key || (!hasPrimaryModifier && !/^F(?:[1-9]|1\d|2[0-4])$/.test(key))) return '';
+  const ordered = ['Control','Alt','Shift','Super'].filter(modifier => modifiers.includes(modifier));
+  return [...ordered, key].join('+');
+}
+
+function shortcutLabel(accelerator = overlayShortcut) {
+  return String(accelerator || '').split('+').map(part => part === 'Control' ? 'Ctrl' : part === 'Super' ? 'Win' : part).join(' + ');
+}
+
+async function setOverlayShortcut(value, { persist = true } = {}) {
+  const accelerator = normalizeShortcutAccelerator(value);
+  if (!accelerator) return { ok:false, reason:'invalid', accelerator:overlayShortcut, label:shortcutLabel() };
+  const previous = overlayShortcut;
+  if (!isSmokeTest && !isSheetsSyncOnce) {
+    if (globalShortcut.isRegistered(previous)) globalShortcut.unregister(previous);
+    overlayShortcutCapturePaused = false;
+    if (!globalShortcut.register(accelerator, toggleOverlay)) {
+      if (previous && !globalShortcut.isRegistered(previous)) globalShortcut.register(previous, toggleOverlay);
+      return { ok:false, reason:'unavailable', accelerator:previous, label:shortcutLabel(previous) };
+    }
+  }
+  overlayShortcut = accelerator;
+  if (persist) {
+    const preferences = await readPreferences();
+    preferences.overlayShortcut = accelerator;
+    await writePreferences(preferences);
+  }
+  refreshTrayMenu();
+  return { ok:true, accelerator, label:shortcutLabel(accelerator) };
+}
+
+function pauseOverlayShortcutCapture() {
+  if (!isSmokeTest && !isSheetsSyncOnce && globalShortcut.isRegistered(overlayShortcut)) globalShortcut.unregister(overlayShortcut);
+  overlayShortcutCapturePaused = true;
+  return { ok:true };
+}
+
+function resumeOverlayShortcutCapture() {
+  if (!overlayShortcutCapturePaused) return { ok:true };
+  overlayShortcutCapturePaused = false;
+  if (isSmokeTest || isSheetsSyncOnce || globalShortcut.isRegistered(overlayShortcut)) return { ok:true };
+  return globalShortcut.register(overlayShortcut, toggleOverlay) ? { ok:true } : { ok:false, reason:'unavailable' };
+}
+
+async function initializeOverlayShortcut() {
+  const preferences = await readPreferences();
+  const preferred = normalizeShortcutAccelerator(preferences.overlayShortcut) || DEFAULT_OVERLAY_SHORTCUT;
+  const result = await setOverlayShortcut(preferred, { persist:false });
+  if (!result.ok && preferred !== DEFAULT_OVERLAY_SHORTCUT) return setOverlayShortcut(DEFAULT_OVERLAY_SHORTCUT, { persist:false });
+  return result;
 }
 
 function toLimitedBuffer(value, maxBytes) {
@@ -669,11 +839,12 @@ function showStartupError(error) {
 const isAiSmokeTest = process.argv.includes('--ai-smoke-test');
 const isSmokeTest = process.argv.includes('--smoke-test') || isAiSmokeTest;
 const isUpdateSmokeTest = process.argv.includes('--update-smoke-test');
+const isSheetsSyncOnce = process.argv.includes('--sheets-sync-once');
 if (isSmokeTest || isUpdateSmokeTest) {
   app.disableHardwareAcceleration();
   app.setPath('userData', path.join(app.getPath('temp'), isUpdateSmokeTest ? 'sloy-memory-overlay-update-smoke' : 'sloy-memory-overlay-smoke'));
 }
-const hasSingleInstanceLock = isSmokeTest || isUpdateSmokeTest || app.requestSingleInstanceLock();
+const hasSingleInstanceLock = isSmokeTest || isUpdateSmokeTest || isSheetsSyncOnce || app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) app.quit();
 
 function cancelHideTimer() {
@@ -1022,6 +1193,7 @@ function refreshTrayMenu() {
     click:() => { void updateManager?.check({ manual:true }); }
   });
   template.push({ label:`Версия ${app.getVersion()}`, enabled:false });
+  template.push({ label:`Горячая клавиша: ${shortcutLabel()}`, enabled:false });
   if (process.platform === 'win32') template.push({
     label:'Запускать V вместе с Windows', type:'checkbox', checked:autoStartEnabled, enabled:app.isPackaged,
     click:item => { void setAutoStart(item.checked).catch(error => console.error('[autostart-failed]', error?.message || error)); }
@@ -1055,15 +1227,15 @@ app.whenReady().then(async () => {
     enabled:app.isPackaged && !isSmokeTest
   }).initialize();
   await initializeAutoStart();
-  if (!isSmokeTest) createTray();
-  if (!isUpdateSmokeTest) updateManager.startBackgroundChecks();
-  if (!launchedAtLogin && !isUpdateSmokeTest) showOverlay();
-  const registered = isSmokeTest || globalShortcut.register('Control+Alt+Space', toggleOverlay);
-  if (!registered) {
-    console.warn('Global shortcut Ctrl+Alt+Space is unavailable');
+  if (!isSmokeTest && !isSheetsSyncOnce) createTray();
+  if (!isUpdateSmokeTest && !isSheetsSyncOnce) updateManager.startBackgroundChecks();
+  if (!launchedAtLogin && !isUpdateSmokeTest && !isSheetsSyncOnce) showOverlay();
+  const shortcutResult = await initializeOverlayShortcut();
+  if (!shortcutResult.ok) {
+    console.warn(`Global shortcut ${shortcutResult.label || shortcutLabel()} is unavailable`);
     tray?.displayBalloon?.({
       title:'V запущена без горячей клавиши',
-      content:'Ctrl+Alt+Space занято другим приложением. Открывайте V из значка в трее.'
+      content:`${shortcutResult.label || shortcutLabel()} занято другим приложением. Открывайте V из значка в трее.`
     });
   }
   capsLockShortcutRegistered = startCapsLockWatcher();
@@ -1193,6 +1365,24 @@ app.whenReady().then(async () => {
     clipboard.writeText(text);
     return { ok:true };
   });
+  handleTrusted('google-sheets:sync', async (_event, payload = {}) => {
+    if (isSmokeTest || isUpdateSmokeTest) return { ok:true, skipped:true };
+    const result = await syncGoogleSheetsSnapshot(payload);
+    if (isSheetsSyncOnce) {
+      console.log(`V_SHEETS_SYNC ${JSON.stringify(result)}`);
+      setTimeout(() => {
+        isQuitting = true;
+        app.exit(result?.ok ? 0 : 1);
+      }, 50);
+    }
+    return result;
+  });
+  handleTrusted('google-sheets:config:get', async () => ({ ok:true, config:await getGoogleSheetsConfig() }));
+  handleTrusted('google-sheets:config:set', async (_event, value = {}) => setGoogleSheetsConfig(value));
+  handleTrusted('shortcut:get', async () => ({ ok:true, accelerator:overlayShortcut, label:shortcutLabel() }));
+  handleTrusted('shortcut:set', async (_event, value) => setOverlayShortcut(boundedString(value, 100)));
+  handleTrusted('shortcut:capture-start', async () => pauseOverlayShortcutCapture());
+  handleTrusted('shortcut:capture-stop', async () => resumeOverlayShortcutCapture());
   handleTrusted('xai:key:status', async (_event, { verify = false } = {}) => {
     const xaiKeys = await getXaiKeys();
     const xaiKey = xaiKeys[0] || '';
@@ -2189,6 +2379,14 @@ ${safeMessage.trim()}`;
     await meetingWindow.webContents.executeJavaScript(`document.querySelector('#finish')?.click()`);
     await new Promise(resolve => setTimeout(resolve, 80));
     if (meetingWindow.isVisible()) throw new Error('finalized_meeting_window_not_closed');
+    const shortcutState = await overlay.webContents.executeJavaScript(`(async () => {
+      const inputPresent = Boolean(document.querySelector('#global-shortcut'));
+      const saved = await window.sloy.setGlobalShortcut('Control+Shift+F12');
+      const loaded = await window.sloy.getGlobalShortcut();
+      await window.sloy.setGlobalShortcut('Control+Alt+Space');
+      return { inputPresent, saved, loaded };
+    })()`);
+    if (!shortcutState.inputPresent || !shortcutState.saved?.ok || shortcutState.loaded?.accelerator !== 'Control+Shift+F12') throw new Error(`global_shortcut_settings_failed:${JSON.stringify(shortcutState)}`);
     await updateManager.check({ manual:true });
     await new Promise(resolve => setTimeout(resolve, 120));
     const updaterUiState = await updateManager.window.webContents.executeJavaScript(`({
@@ -2204,6 +2402,10 @@ ${safeMessage.trim()}`;
     console.log('SLOY_SMOKE_TEST_READY');
     isQuitting = true;
     app.quit();
+    return;
+  }
+  if (isSheetsSyncOnce) {
+    setTimeout(() => { isQuitting = true; app.quit(); }, 60000);
     return;
   }
   if (!launchedAtLogin && !isUpdateSmokeTest) showOverlay();

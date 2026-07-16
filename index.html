@@ -37,7 +37,7 @@
       </div>
       <div class="rail-footer">
         <button class="rail-action privacy-toggle" aria-label="Скрыть содержимое" title="Режим приватности">&#9673;</button>
-        <button class="rail-action" id="ai-settings-toggle" aria-label="Настройки AI" title="AI-провайдеры и распознавание речи">&#10022;</button>
+        <button class="rail-action" id="ai-settings-toggle" aria-label="Настройки V" title="AI, запись и горячая клавиша">&#10022;</button>
         <button class="rail-action" id="font-toggle" aria-label="Шрифт" title="Выбрать шрифт" style="font-size:13px;font-weight:700">Aa</button>
         <button class="rail-action close-overlay" aria-label="Закрыть">&times;</button>
       </div>
@@ -156,7 +156,7 @@
   <dialog class="space-dialog ai-settings-dialog" id="ai-settings-dialog">
     <form method="dialog" id="ai-settings-form">
       <span class="dialog-icon">&#10022;</span>
-      <h2>AI для пространства и встреч</h2>
+      <h2>Настройки V</h2>
       <p>Azure Speech ведёт живую расшифровку, а Cerebras, xAI, Gemini или Groq готовят конспект и подсказки.</p>
       <div class="ai-key-status" id="ai-key-status">Проверяю подключение…</div>
       <label>Ключ Azure Speech<input id="azure-speech-key" type="password" autocomplete="off" placeholder="KEY 1 из Azure · не сохраняется в интерфейсе"></label>
@@ -170,6 +170,21 @@
         <button class="ai-key-add-field" type="button" id="ai-key-add-field">+ Добавить ещё ключ</button>
       </div>
       <label>Язык разговора<select id="transcription-language"><option value="uk">Українська</option><option value="ru">Русский</option><option value="en">English</option></select></label>
+      <div class="shortcut-setting">
+        <label>Горячая клавиша V<input id="global-shortcut" type="text" readonly value="Ctrl + Alt + Space" aria-describedby="global-shortcut-hint"></label>
+        <button type="button" id="global-shortcut-reset">По умолчанию</button>
+        <small id="global-shortcut-hint">Нажмите поле, затем новое сочетание. Для букв и цифр нужен Ctrl, Alt или Win; клавиши F1–F24 можно назначать отдельно.</small>
+      </div>
+      <section class="google-sheets-setting" aria-labelledby="google-sheets-setting-title">
+        <div><strong id="google-sheets-setting-title">Google Таблицы</strong><small id="google-sheets-status">Подключение хранится только на этом компьютере</small></div>
+        <label class="setting-check"><input id="google-sheets-enabled" type="checkbox"><span>Автоматически зеркалить карточки и хаб</span></label>
+        <label>Ссылка или ID собственной таблицы<input id="google-sheets-url" type="text" autocomplete="off" placeholder="https://docs.google.com/spreadsheets/d/…/edit"></label>
+        <label>Путь к Credentials JSON<input id="google-sheets-credentials" type="text" autocomplete="off" placeholder="C:\путь\service-account.json"></label>
+        <label>OAuth Desktop JSON для изображений<input id="google-drive-oauth-client" type="text" autocomplete="off" placeholder="Необязательно · требуется для локальных изображений"></label>
+        <label class="setting-check"><input id="google-drive-share-images" type="checkbox"><span>Показывать изображения в таблице по ссылке</span></label>
+        <small>Для отображения внутри ячейки только выгруженные V изображения получают доступ «всем, у кого есть ссылка». Они не публикуются в поиске.</small>
+        <small>На другом компьютере эти поля будут пустыми: его владелец подключает только свою таблицу. Остальные настройки V от этой привязки не зависят.</small>
+      </section>
       <label class="setting-check"><input id="capture-system-audio" type="checkbox"><span>Подключать звук компьютера для записи и AI-помощника</span></label>
       <label class="setting-check"><input id="xai-auto-transcribe" type="checkbox" checked><span>Расшифровывать запись автоматически</span></label>
       <label class="setting-check"><input id="xai-live-transcription" type="checkbox" checked><span>Показывать расшифровку во время разговора</span></label>
