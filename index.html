@@ -129,15 +129,6 @@
       <div class="dialog-actions"><button value="cancel" autofocus>Отмена</button><button class="dialog-danger" value="delete">Удалить</button></div>
     </form>
   </dialog>
-  <dialog class="space-dialog" id="text-image-dialog" aria-labelledby="text-image-title">
-    <form method="dialog">
-      <h2 id="text-image-title">Добавить изображение</h2>
-      <p>Нажмите Ctrl+V, чтобы вставить изображение из буфера, или выберите файл.</p>
-      <output id="text-image-status" aria-live="polite"></output>
-      <input id="text-image-input" type="file" accept="image/*" hidden>
-      <div class="dialog-actions"><button value="cancel" autofocus>Отмена</button><button type="button" id="text-image-choose">Выбрать файл</button><button type="button" class="dialog-primary" id="text-image-paste">Вставить из буфера</button></div>
-    </form>
-  </dialog>
   <dialog class="space-dialog link-dialog" id="link-dialog">
     <form method="dialog" id="link-form">
       <span class="dialog-icon">↗</span>
@@ -268,10 +259,13 @@
     </div>
     <div class="theme-chip" role="group" aria-label="Цветовая тема">
       <button class="theme-btn active" type="button" data-theme-choice="dark" aria-pressed="true">Тёмная</button>
-      <button class="theme-btn" type="button" data-theme-choice="light" aria-pressed="false">Светлая</button>
+      <button class="theme-btn" type="button" data-theme-choice="light" data-theme-light aria-pressed="false">Светлая</button>
       <button class="theme-btn" type="button" data-theme-choice="graphite" aria-pressed="false">Графит</button>
       <button class="theme-btn" type="button" data-theme-choice="pine" aria-pressed="false">Хвоя</button>
-      <button class="theme-btn" type="button" data-theme-choice="sand" aria-pressed="false">Песок</button>
+      <button class="theme-btn" type="button" data-theme-choice="sand" data-theme-light aria-pressed="false">Песок</button>
+      <button class="theme-btn" type="button" data-theme-choice="ocean" aria-pressed="false">Океан</button>
+      <button class="theme-btn" type="button" data-theme-choice="plum" aria-pressed="false">Слива</button>
+      <button class="theme-btn" type="button" data-theme-choice="sage" data-theme-light aria-pressed="false">Шалфей</button>
     </div>
     <div class="font-panel-title" style="padding: 4px 8px 2px">Шрифт</div>
     <button class="font-option active" data-font="default"><span class="font-option-preview" style="font-family:Segoe UI">Aa</span>Segoe UI</button>

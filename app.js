@@ -3,7 +3,6 @@ const SPACES_KEY = 'sloy.spaces.v2';
 const ACTIVE_SPACE_KEY = 'sloy.active-space.v2';
 let spacesStorageWritesBlocked = false;
 const TRASH_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5"/></svg>';
-const IMAGE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="9" r="1.5"/><path d="m4 17 4-4 3 3 4-5 5 6"/></svg>';
 let pendingStorageNotice = '';
 let storageNoticeTimer = null;
 
@@ -401,13 +400,6 @@ const coachButton = document.querySelector('#coach-button');
 const spaceDialog = document.querySelector('#space-dialog');
 const spaceDeleteDialog = document.querySelector('#space-delete-dialog');
 const spaceContext = document.querySelector('#space-context');
-const textImageDialog = document.querySelector('#text-image-dialog');
-const textImageInput = document.querySelector('#text-image-input');
-let textImageTarget = null;
-let pasteImageCardId = null;
-const textImagePaste = document.querySelector('#text-image-paste');
-const textImageChoose = document.querySelector('#text-image-choose');
-const textImageStatus = document.querySelector('#text-image-status');
 const knowledgeDialog = document.getElementById('knowledge-dialog');
 const knowledgeFeed = document.getElementById('knowledge-feed');
 const knowledgeInput = document.getElementById('knowledge-input');
@@ -1871,7 +1863,6 @@ function switchSpace(id) {
 function setActiveSpace(space) {
   activeSpaceId = space.id;
   selectedIds.clear();
-  pasteImageCardId = null;
   cards = space.cards;
   search.value = '';
 }
@@ -1981,12 +1972,10 @@ function render() {
   if (dashboard) ensureCardPositions();
   board.innerHTML = '';
   const visibleCards = dashboard ? cards.filter(card => !card.detachedMeeting) : cards;
-  if (!visibleCards.some(card => card.id === pasteImageCardId)) pasteImageCardId = null;
   displayCards(visibleCards, view).forEach((card, index) => {
     const el = document.createElement('article');
     el.className = `card ${card.size || 'medium'} ${card.type === 'image' ? 'image-card' : ''} ${card.type === 'transcript' ? 'transcript-card' : ''} ${card.boardCheatSource ? 'board-cheat-card' : ''} ${card.antischoolVersion ? 'antischool-card' : ''}`;
     el.dataset.id = card.id;
-    el.classList.toggle('image-paste-target', card.id === pasteImageCardId);
     el.classList.toggle('selected', selectedIds.has(card.id));
     el.style.setProperty('--accent', card.accent || '#7065e8');
     el.style.animationDelay = `${Math.min(index * 28, 190)}ms`;
@@ -2194,8 +2183,7 @@ function cardMarkup(card) {
   const imageTool = card.type === 'image' ? `<button class="image-settings" title="Настроить изображение" aria-label="Настроить изображение">⌁</button>` : '';
   const linkTool = card.type === 'links' ? `<button class="link-settings" title="Изменить ссылку" aria-label="Изменить ссылку">✎</button>` : '';
   const moveTool = editMode ? '<button class="drag-handle" type="button" aria-label="Переместить карточку" title="Потяните, чтобы переместить карточку или выделенную группу">⠿</button>' : '';
-  const attachTool = card.type === 'text' ? `<button type="button" class="card-attach-image" aria-label="Добавить изображение" title="Добавить изображение · Ctrl+V или файл">${IMAGE_ICON}</button>` : '';
-  const editTools = editMode || attachTool ? `<div class="card-tools">${moveTool}${imageTool}${linkTool}${attachTool}${menu}</div>` : menu;
+  const editTools = editMode ? `<div class="card-tools">${moveTool}${imageTool}${linkTool}${menu}</div>` : menu;
   const kicker = `<span class="card-kicker-label" ${editMode ? 'contenteditable="true" role="textbox" aria-label="Номер или метка карточки" title="Введите номер для сортировки, например 1"' : ''}>${escapeHtml(card.kicker || 'Заметка')}</span>`;
   const header = `<header class="card-header"><div><p class="card-kicker"><i></i>${kicker}</p><h2 ${editMode ? 'contenteditable="true"' : ''}>${escapeHtml(card.title || 'Без названия')}</h2></div>${editTools}</header>`;
 
@@ -2365,12 +2353,6 @@ function bindCardEvents() {
     el.querySelector('.card-menu')?.addEventListener('click', event => {
       event.stopPropagation();
       removeCard(id);
-    });
-    el.querySelector('.card-attach-image')?.addEventListener('click', () => {
-      textImageTarget = { cardId:id };
-      updateTextImageDialog();
-      textImageInput.value = '';
-      textImageDialog.showModal();
     });
     el.querySelectorAll('input[type="checkbox"]').forEach(input => input.addEventListener('change', () => {
       const card = cards.find(c => c.id === id);
@@ -3043,7 +3025,6 @@ function addCard(type) {
   if (type === 'checklist') base.items = [{ text: 'Первый пункт', checked: false }, { text: 'Ещё один пункт', checked: false }];
   else base.content = '<p>Нажмите «Править» и добавьте сюда то, что важно держать под рукой.</p>';
   cards.unshift(base);
-  if (type === 'text') pasteImageCardId = id;
   saveCards('Карточка добавлена');
   render();
   setEditMode(true);
@@ -3287,41 +3268,6 @@ async function saveImageAsset(file) {
   }
 }
 
-async function attachTextImage(file, cardId, dialogTarget = null) {
-  const dialogIsOpen = () => dialogTarget && textImageDialog.open && textImageTarget === dialogTarget;
-  try {
-    const src = await saveImageAsset(file);
-    if (dialogTarget && !dialogIsOpen()) return;
-    const space = workspaces.find(item => item.cards.some(card => card.id === cardId));
-    const card = space?.cards.find(item => item.id === cardId && item.type === 'text');
-    if (!card) throw new Error('Карточка была удалена');
-    const previousImages = card.images;
-    card.images = [...(previousImages || []), { src, title:file.name?.replace(/\.[^.]+$/, '') }];
-    if (!persistWorkspaces()) {
-      card.images = previousImages;
-      throw new Error('Не удалось сохранить изменения карточки');
-    }
-    if (dialogIsOpen()) textImageDialog.close();
-    if (space.id === activeSpaceId) render();
-    showToast('Изображение добавлено к карточке');
-  } catch (error) {
-    if (dialogIsOpen()) updateTextImageDialog(error.message);
-    else if (!dialogTarget) showToast(error.message);
-  }
-}
-
-function attachTextImageFromDialog(file) {
-  if (!file || !textImageTarget || textImageChoose.disabled) return;
-  updateTextImageDialog('Сохраняю изображение…', true);
-  void attachTextImage(file, textImageTarget.cardId, textImageTarget);
-}
-
-function updateTextImageDialog(message = '', busy = false) {
-  textImageChoose.disabled = busy;
-  textImagePaste.disabled = busy || !window.sloy?.readClipboardImage;
-  textImageStatus.textContent = message;
-}
-
 async function addImageFile(file, title = '') {
   if (!file) return;
   try {
@@ -3339,19 +3285,17 @@ async function addImageFile(file, title = '') {
 function addPastedText(text) {
   const clean = text.trim();
   if (!clean) return;
-  const isLink = /^https?:\/\/\S+$/i.test(clean);
-  if (isLink) {
+  if (/^https?:\/\/\S+$/i.test(clean)) {
     const host = new URL(clean).hostname.replace(/^www\./, '');
     cards.unshift({ id:crypto.randomUUID(), createdAt:Date.now(), type:'links', size:'small', accent:'#627fc0', kicker:'Ссылка', title:host, links:[{ icon:'↗', label:clean, url:clean }] });
   } else {
     const lines = clean.split(/\r?\n/).filter(Boolean);
     const title = (lines.shift() || 'Вставленный текст').slice(0, 80);
     const body = lines.length ? lines : [title];
-    pasteImageCardId = crypto.randomUUID();
-    cards.unshift({ id:pasteImageCardId, createdAt:Date.now(), type:'text', size:clean.length > 280 ? 'large' : 'medium', accent:randomAccent(), kicker:'Из буфера', title, content:body.map(line => `<p>${escapeHtml(line)}</p>`).join('') });
+    cards.unshift({ id:crypto.randomUUID(), createdAt:Date.now(), type:'text', size:clean.length > 280 ? 'large' : 'medium', accent:randomAccent(), kicker:'Из буфера', title, content:body.map(line => `<p>${escapeHtml(line)}</p>`).join('') });
   }
   search.value = '';
-  saveCards(isLink ? 'Ссылка добавлена из буфера' : 'Текст добавлен · Ctrl+V вставит снимок в эту карточку');
+  saveCards('Добавлено из буфера');
   render();
 }
 
@@ -5088,27 +5032,6 @@ document.querySelector('#space-delete-form').addEventListener('submit', event =>
   spaceDeleteDialog.close();
   if (event.submitter?.value === 'delete' && deleteSpace(spaceDeleteDialog.dataset.spaceId)) document.querySelector('.space.active')?.focus();
 });
-textImageChoose.addEventListener('click', () => textImageInput.click());
-textImagePaste.addEventListener('click', async () => {
-  const target = textImageTarget;
-  updateTextImageDialog('Читаю буфер обмена…', true);
-  try {
-    const result = await window.sloy.readClipboardImage();
-    if (!textImageDialog.open || target !== textImageTarget) return;
-    if (!result?.ok) {
-      updateTextImageDialog(result?.reason === 'size' ? 'Изображение больше 16 МБ' : 'В буфере обмена нет изображения');
-      return;
-    }
-    updateTextImageDialog('Сохраняю изображение…', true);
-    await attachTextImage(new File([result.bytes], 'Снимок экрана.png', { type:'image/png' }), target.cardId, target);
-  } catch {
-    if (textImageDialog.open && target === textImageTarget) updateTextImageDialog('Не удалось прочитать буфер обмена');
-  }
-});
-textImageInput.addEventListener('change', () => {
-  attachTextImageFromDialog(textImageInput.files[0]);
-  textImageInput.value = '';
-});
 document.querySelector('#recording-preflight-form')?.addEventListener('submit', event => {
   event.preventDefault();
   if (event.submitter?.value === 'cancel') { finishRecordingPreflight(false); return; }
@@ -5270,26 +5193,9 @@ knowledgeInput?.addEventListener('paste', event => {
 });
 
 document.addEventListener('paste', event => {
-  const imageItem = [...event.clipboardData.items].find(item => item.type.startsWith('image/'));
-  if (textImageDialog.open) {
-    event.preventDefault();
-    if (imageItem) attachTextImageFromDialog(imageItem.getAsFile());
-    else if (!textImageChoose.disabled) updateTextImageDialog('В буфере обмена нет изображения');
-    return;
-  }
   if (document.querySelector('dialog[open]')) return;
-  const focused = document.activeElement;
-  if (imageItem) {
-    const focusedCard = focused.closest('.card');
-    const isEditing = focused.matches('input, textarea, [contenteditable="true"]');
-    const cardId = focusedCard?.dataset.id || (!isEditing ? pasteImageCardId : null);
-    if (cards.some(card => card.id === cardId && card.type === 'text')) {
-      event.preventDefault();
-      void attachTextImage(imageItem.getAsFile(), cardId);
-      return;
-    }
-  }
-  if (focused.matches('input, textarea, [contenteditable="true"]')) return;
+  if (document.activeElement.matches('input, textarea, [contenteditable="true"]')) return;
+  const imageItem = [...event.clipboardData.items].find(item => item.type.startsWith('image/'));
   if (imageItem) {
     event.preventDefault();
     addImageFile(imageItem.getAsFile());
@@ -5298,15 +5204,6 @@ document.addEventListener('paste', event => {
   const text = event.clipboardData.getData('text/plain');
   if (text) { event.preventDefault(); addPastedText(text); }
 });
-
-document.addEventListener('pointerdown', event => {
-  if (!board.contains(event.target) && !event.target.closest('.workspace')) return;
-  const target = event.target.closest('.card');
-  const id = target?.dataset.id;
-  pasteImageCardId = cards.some(card => card.id === id && card.type === 'text') ? id : null;
-  board.querySelector('.image-paste-target')?.classList.remove('image-paste-target');
-  if (pasteImageCardId) target.classList.add('image-paste-target');
-}, true);
 
 document.addEventListener('keydown', event => {
   if (document.querySelector('dialog[open]')) return;
@@ -5357,23 +5254,22 @@ window.sloy?.onHiding(() => {
 // ══════════════════════════════════════════
 (function initTheme() {
   const options = [...document.querySelectorAll('[data-theme-choice]')];
-  const apply = theme => {
-    document.body.dataset.theme = theme;
-    const isLight = theme === 'light' || theme === 'sand';
+  const apply = selected => {
+    document.body.dataset.theme = selected.dataset.themeChoice;
+    const isLight = selected.hasAttribute('data-theme-light');
     document.body.classList.toggle('light-theme', isLight);
     document.documentElement.style.colorScheme = isLight ? 'light' : 'dark';
     options.forEach(button => {
-      const active = button.dataset.themeChoice === theme;
+      const active = button === selected;
       button.classList.toggle('active', active);
       button.setAttribute('aria-pressed', String(active));
     });
   };
   const saved = safeStorageGet('sloy.theme');
-  apply(options.some(button => button.dataset.themeChoice === saved) ? saved : 'dark');
+  apply(options.find(button => button.dataset.themeChoice === saved) || options[0]);
   options.forEach(button => button.addEventListener('click', () => {
-    const theme = button.dataset.themeChoice;
-    apply(theme);
-    safeStorageSet('sloy.theme', theme);
+    apply(button);
+    safeStorageSet('sloy.theme', button.dataset.themeChoice);
   }));
 })();
 

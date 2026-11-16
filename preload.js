@@ -14,7 +14,6 @@ const api = Object.freeze({
   readAudio: (url) => ipcRenderer.invoke('audio:read', url),
   openExternal: (url) => ipcRenderer.invoke('external:open', url),
   copyText: (text) => ipcRenderer.invoke('clipboard:write-text', text),
-  readClipboardImage: () => ipcRenderer.invoke('clipboard:read-image'),
   syncGoogleSheets: (payload) => ipcRenderer.invoke('google-sheets:sync', payload),
   getGoogleSheetsConfig: () => ipcRenderer.invoke('google-sheets:config:get'),
   setGoogleSheetsConfig: (config) => ipcRenderer.invoke('google-sheets:config:set', config),

@@ -1365,13 +1365,6 @@ app.whenReady().then(async () => {
     clipboard.writeText(text);
     return { ok:true };
   });
-  handleTrustedAppPage('clipboard:read-image', () => {
-    const image = clipboard.readImage();
-    if (image.isEmpty()) return { ok:false, reason:'empty' };
-    const png = image.toPNG();
-    if (png.length > LIMITS.assetBytes) return { ok:false, reason:'size' };
-    return { ok:true, bytes:new Uint8Array(png) };
-  });
   handleTrusted('google-sheets:sync', async (_event, payload = {}) => {
     if (isSmokeTest || isUpdateSmokeTest) return { ok:true, skipped:true };
     const result = await syncGoogleSheetsSnapshot(payload);
