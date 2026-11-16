@@ -53,7 +53,7 @@ assert.match(app, /updateLiveOutline/, 'Live transcript must feed the on-screen 
 assert.match(app, /Расшифровать и сделать конспект/, 'Saved recordings must support retrying AI processing');
 assert.match(app, /transcriptionLanguage:'uk'/, 'Speech language must default to an explicit Ukrainian locale');
 assert.doesNotMatch(html, /option value="auto"/, 'Language selection must not silently fall back to mixed automatic detection');
-assert.match(html, /<option value="uk">Українська<\/option><option value="ru">Русский<\/option><option value="en">English<\/option>/, 'Language selector must offer explicit Ukrainian, Russian, and English modes');
+assert.match(html, /<option value="uk">Украинский<\/option><option value="ru">Русский<\/option><option value="en">Английский<\/option>/, 'Language selector must offer explicit Ukrainian, Russian, and English modes');
 assert.match(app, /class="meeting-language"/, 'Each meeting hub must expose its locked recognition language');
 assert.match(app, /function rebuildMeetingSummary/, 'Existing summaries must be regeneratable in the selected language');
 assert.match(app, /migrateOrphanAiCardsIntoKnowledge/, 'Legacy AI helper cards must be removed from the board without losing their content');
@@ -90,7 +90,6 @@ assert.match(app, /analyzeKnowledgeImage/, 'Pasted images must be analyzed inste
 assert.match(app, /ДОКАЗОВИЙ ПАКЕТ ІЗ БАЗИ ЗНАНЬ/, 'Live AI context must include the current workspace knowledge base');
 assert.match(main, /knowledge:analyze-image/, 'Main process must provide protected vision analysis');
 assert.match(main, /qwen\/qwen3\.6-27b/, 'Knowledge vision must use a currently supported multimodal model');
-assert.match(html, /value="uk">Українська/, 'Language selector must expose Ukrainian');
 assert.match(main, /extractGroqKey/, 'Stored provider values must be parsed as strict API keys');
 assert.match(main, /invalidStoredKey/, 'Invalid encrypted values must be reported to the UI');
 assert.match(app, /await context\.resume\(\)/, 'Live audio contexts must be resumed before capturing PCM');

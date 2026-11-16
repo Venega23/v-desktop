@@ -400,9 +400,14 @@ const recordButton = document.querySelector('#record-button');
 const coachButton = document.querySelector('#coach-button');
 const spaceDialog = document.querySelector('#space-dialog');
 const spaceDeleteDialog = document.querySelector('#space-delete-dialog');
+const spaceContext = document.querySelector('#space-context');
 const textImageDialog = document.querySelector('#text-image-dialog');
 const textImageInput = document.querySelector('#text-image-input');
 let textImageTarget = null;
+let pasteImageCardId = null;
+const textImagePaste = document.querySelector('#text-image-paste');
+const textImageChoose = document.querySelector('#text-image-choose');
+const textImageStatus = document.querySelector('#text-image-status');
 const knowledgeDialog = document.getElementById('knowledge-dialog');
 const knowledgeFeed = document.getElementById('knowledge-feed');
 const knowledgeInput = document.getElementById('knowledge-input');
@@ -1389,7 +1394,7 @@ function importMeetingToKnowledge(space, card) {
   space.knowledge ||= { items:[], summary:'', facts:[], tags:[], playbook:[], revision:0 };
   space.knowledge.items = space.knowledge.items || [];
   const existingIndex = space.knowledge.items.findIndex(item => item.sourceCardId === card.id);
-  const title = card.title || `Зустріч: ${new Date(card.createdAt).toLocaleDateString('uk-UA')}`;
+  const title = card.title || `Встреча · ${new Date(card.createdAt).toLocaleDateString('ru-RU')}`;
   if (existingIndex >= 0) {
     if (space.knowledge.items[existingIndex].text === text && space.knowledge.items[existingIndex].title === title) {
       return;
@@ -1418,7 +1423,11 @@ function importMeetingToKnowledge(space, card) {
 
 function setKnowledgeHubTab(tab) {
   knowledgeHubTab = tab === 'materials' ? 'materials' : 'chat';
-  document.querySelectorAll('[data-knowledge-tab]').forEach(button => button.classList.toggle('active', button.dataset.knowledgeTab === knowledgeHubTab));
+  document.querySelectorAll('[data-knowledge-tab]').forEach(button => {
+    const active = button.dataset.knowledgeTab === knowledgeHubTab;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
   document.getElementById('space-chat-panel').hidden = knowledgeHubTab !== 'chat';
   document.getElementById('knowledge-materials-panel').hidden = knowledgeHubTab !== 'materials';
 }
@@ -1460,14 +1469,20 @@ function setSpaceChatTextScale(nextScale, { announce = true } = {}) {
 function renderSpaceChat() {
   const knowledge = workspaceKnowledge();
   const messages = knowledge.chat.slice(-80);
-  const welcome = `<article class="space-chat-message assistant welcome"><span>✦</span><div><strong>Чат пространства</strong><p>Я использую материалы хаба и все карточки этой доски. Спросите что угодно или скажите, какие карточки собрать.</p></div></article>`;
+  const welcome = activeSpace().cards.length || knowledge.items.length
+    ? '<div class="knowledge-empty"><span aria-hidden="true">✦</span><h3>Что хотите узнать?</h3><p>Задайте вопрос по материалам или соберите карточки для доски.</p></div>'
+    : '<div class="knowledge-empty"><span aria-hidden="true">✦</span><h3>Добавьте источник для чата</h3><p>Чат использует карточки этой доски и материалы из соседней вкладки.</p><button type="button" data-open-materials>Добавить материал</button></div>';
   const history = messages.map(message => {
     const created = Number(message.createdCards || 0);
-    const meta = [created ? `Создано карточек: ${created}` : '', message.provider ? message.provider : ''].filter(Boolean).join(' · ');
-    return `<article class="space-chat-message ${message.role === 'user' ? 'user' : 'assistant'}" data-chat-message="${escapeAttr(message.id || '')}"><span>${message.role === 'user' ? 'Вы' : '✦'}</span><div><strong>${message.role === 'user' ? 'Вы' : 'Пространство AI'}</strong><div class="space-chat-message-text" data-chat-message-id="${escapeAttr(message.id || '')}" title="Выделите фрагмент, чтобы изменить шрифт или оформление">${chatFormattedTextMarkup(message)}</div>${meta ? `<small>${escapeHtml(meta)}</small>` : ''}</div></article>`;
+    const user = message.role === 'user';
+    const id = escapeAttr(message.id || '');
+    const meta = [created ? `Карточек на доске: ${created}` : '', message.provider || ''].filter(Boolean).join(' · ');
+    const footer = user ? '' : `<div class="space-chat-message-footer">${meta ? `<small>${escapeHtml(meta)}</small>` : ''}<button type="button" data-copy-chat="${id}">Копировать</button></div>`;
+    return `<article class="space-chat-message ${user ? 'user' : 'assistant'}" data-chat-message="${id}"><span aria-hidden="true">${user ? 'Вы' : '✦'}</span><div><strong>${user ? 'Вы' : 'Чат пространства'}</strong><div class="space-chat-message-text" data-chat-message-id="${id}" title="Выделите фрагмент, чтобы изменить шрифт или оформление">${chatFormattedTextMarkup(message)}</div>${footer}</div></article>`;
   }).join('');
   const pending = spaceChatBusy && spaceChatBusySpaceId === activeSpaceId ? '<article class="space-chat-message assistant pending"><span>✦</span><div><strong>Изучаю пространство…</strong><p>Сопоставляю материалы и готовлю ответ.</p></div></article>' : '';
-  spaceChatFeed.innerHTML = `${welcome}${history}${pending}`;
+  spaceChatFeed.innerHTML = `${history || welcome}${pending}`;
+  document.getElementById('space-chat-suggestions').hidden = !activeSpace().cards.length && !knowledge.items.length;
   applySpaceChatUi();
   const sendButton = document.getElementById('space-chat-send');
   sendButton.disabled = spaceChatBusy;
@@ -1477,12 +1492,25 @@ function renderSpaceChat() {
 
 function renderKnowledgeHub() {
   const knowledge = workspaceKnowledge();
-  document.getElementById('knowledge-title').textContent = `Пространство AI · ${activeSpace().title}`;
-  document.getElementById('knowledge-summary').textContent = knowledge.processing ? 'AI обновляет общую базу знаний…' : knowledge.summary || 'Добавьте инструкции, факты, термины или изображения — помощник будет учитывать их только в этом пространстве.';
-  knowledgeFeed.innerHTML = knowledge.items.length ? knowledge.items.slice().reverse().map(item => `<article class="knowledge-item" data-knowledge-id="${escapeAttr(item.id)}">${item.imageSrc ? `<img src="${escapeAttr(item.imageSrc)}" alt="">` : '<span class="knowledge-item-icon">Aa</span>'}<div><strong>${escapeHtml(item.title || (item.type === 'image' ? 'Изображение' : 'Заметка'))}</strong><p>${escapeHtml(String(item.summary || item.text || (item.status === 'processing' ? 'Обрабатываю изображение…' : 'Нет извлечённого текста')).slice(0,700))}</p></div><button type="button" data-remove-knowledge="${escapeAttr(item.id)}" aria-label="Удалить">×</button></article>`).join('') : '<p class="meeting-empty">Здесь пока пусто. Вставьте текст или изображение — отдельная карточка на доске не создастся.</p>';
+  document.getElementById('knowledge-space-name').textContent = activeSpace().title;
+  document.getElementById('knowledge-card-count').textContent = activeSpace().cards.length;
+  document.getElementById('knowledge-material-count').textContent = knowledge.items.length;
+  const summary = document.getElementById('knowledge-summary');
+  summary.textContent = knowledge.processing ? 'Обновляю сводку материалов…' : knowledge.summary || '';
+  summary.hidden = !summary.textContent;
+  const expanded = new Set([...knowledgeFeed.querySelectorAll('details[open]')].map(details => details.closest('[data-knowledge-id]').dataset.knowledgeId));
+  knowledgeFeed.innerHTML = knowledge.items.length ? knowledge.items.slice().reverse().map(item => {
+    const title = escapeHtml(item.title || (item.type === 'image' ? 'Изображение' : 'Заметка'));
+    const text = String(item.summary || item.text || (item.status === 'processing' ? 'Распознаю изображение…' : 'Нет извлечённого текста'));
+    const fullText = item.text || text;
+    const details = fullText !== text || text.length > 250;
+    const preview = `<p>${escapeHtml(text.slice(0,250))}${text.length > 250 ? '…' : ''}</p>`;
+    return `<article class="knowledge-item" data-knowledge-id="${escapeAttr(item.id)}">${item.imageSrc ? `<img src="${escapeAttr(item.imageSrc)}" alt="${title}">` : '<span class="knowledge-item-icon" aria-hidden="true">Aa</span>'}<div><strong>${title}</strong>${preview}${details ? `<details ${expanded.has(item.id) ? 'open' : ''}><summary>Полный текст</summary><p>${escapeHtml(fullText)}</p></details>` : ''}</div><button type="button" data-remove-knowledge="${escapeAttr(item.id)}" aria-label="Удалить материал ${title}" title="Удалить материал">${TRASH_ICON}</button></article>`;
+  }).join('') : '<div class="knowledge-empty"><h3>Пока нет материалов</h3><p>Добавьте заметку, инструкцию или изображение для чата.</p></div>';
   knowledgeFeed.querySelectorAll('[data-remove-knowledge]').forEach(button => button.addEventListener('click', () => {
     knowledge.items = knowledge.items.filter(item => item.id !== button.dataset.removeKnowledge);
     knowledge.revision++;
+    if (!knowledge.items.length) Object.assign(knowledge, { summary:'', facts:[], tags:[], playbook:[], processing:false });
     persistWorkspaces();
     renderKnowledgeHub();
     void consolidateWorkspaceKnowledge(activeSpace().id);
@@ -1597,7 +1625,7 @@ async function sendSpaceChatMessage(preset = '') {
   try {
     const result = await window.sloy.spaceChat({
       message:taskMessage, history, context:buildSpaceChatContext(space, retrievalQuery, taskIntent),
-      language:loadAiSettings().transcriptionLanguage || 'uk', preferences:effectivePreferences
+      language:'ru', preferences:effectivePreferences
     });
     let created = [];
     if (result?.ok && result.action === 'create_cards') created = publishSpaceChatCards(space, result.cards, userMessage.id);
@@ -1713,14 +1741,13 @@ function renderSpaces() {
     const recording = space.id === recordingSpId;
     const id = escapeAttr(space.id);
     const title = escapeAttr(space.title);
-    return `<div class="space-row"><button class="space ${active ? 'active' : ''} ${recording ? 'space-recording' : ''}" data-space="${id}" aria-label="${title}" ${active ? 'aria-current="true"' : ''}><span>${escapeHtml(space.glyph)}</span><em>${escapeHtml(space.title)}</em>${recording ? '<i class="rec-dot"></i>' : ''}</button><button type="button" class="space-delete" data-delete-space="${id}" aria-label="Видалити простір ${title}" title="Видалити простір">${TRASH_ICON}</button></div>`;
-  }).join('') + '<button class="space add-space" aria-label="Додати простір"><span>+</span><em>Додати</em></button>';
+    return `<button class="space ${active ? 'active' : ''} ${recording ? 'space-recording' : ''}" data-space="${id}" aria-label="${title}" ${active ? 'aria-current="true"' : ''}><span>${escapeHtml(space.glyph)}</span><em>${escapeHtml(space.title)}</em>${recording ? '<i class="rec-dot"></i>' : ''}</button>`;
+  }).join('') + '<button class="space add-space" aria-label="Добавить пространство"><span>+</span><em>Добавить</em></button>';
   const current = activeSpace();
   document.querySelector('#workspace-title').textContent = current.title;
   document.querySelector('.workspace-glyph').textContent = current.glyph;
   document.getElementById('knowledge-count').textContent = current.knowledge?.items?.length || 0;
   list.querySelectorAll('[data-space]').forEach(button => button.addEventListener('click', () => switchSpace(button.dataset.space)));
-  list.querySelectorAll('[data-delete-space]').forEach(button => button.addEventListener('click', () => openSpaceDeleteDialog(button.dataset.deleteSpace)));
   list.querySelector('.add-space').addEventListener('click', openSpaceDialog);
 }
 
@@ -1844,6 +1871,7 @@ function switchSpace(id) {
 function setActiveSpace(space) {
   activeSpaceId = space.id;
   selectedIds.clear();
+  pasteImageCardId = null;
   cards = space.cards;
   search.value = '';
 }
@@ -1953,10 +1981,12 @@ function render() {
   if (dashboard) ensureCardPositions();
   board.innerHTML = '';
   const visibleCards = dashboard ? cards.filter(card => !card.detachedMeeting) : cards;
+  if (!visibleCards.some(card => card.id === pasteImageCardId)) pasteImageCardId = null;
   displayCards(visibleCards, view).forEach((card, index) => {
     const el = document.createElement('article');
     el.className = `card ${card.size || 'medium'} ${card.type === 'image' ? 'image-card' : ''} ${card.type === 'transcript' ? 'transcript-card' : ''} ${card.boardCheatSource ? 'board-cheat-card' : ''} ${card.antischoolVersion ? 'antischool-card' : ''}`;
     el.dataset.id = card.id;
+    el.classList.toggle('image-paste-target', card.id === pasteImageCardId);
     el.classList.toggle('selected', selectedIds.has(card.id));
     el.style.setProperty('--accent', card.accent || '#7065e8');
     el.style.animationDelay = `${Math.min(index * 28, 190)}ms`;
@@ -2164,7 +2194,7 @@ function cardMarkup(card) {
   const imageTool = card.type === 'image' ? `<button class="image-settings" title="Настроить изображение" aria-label="Настроить изображение">⌁</button>` : '';
   const linkTool = card.type === 'links' ? `<button class="link-settings" title="Изменить ссылку" aria-label="Изменить ссылку">✎</button>` : '';
   const moveTool = editMode ? '<button class="drag-handle" type="button" aria-label="Переместить карточку" title="Потяните, чтобы переместить карточку или выделенную группу">⠿</button>' : '';
-  const attachTool = card.type === 'text' ? `<button type="button" class="card-attach-image" aria-label="Добавить изображение" title="Добавить изображение">${IMAGE_ICON}</button>` : '';
+  const attachTool = card.type === 'text' ? `<button type="button" class="card-attach-image" aria-label="Добавить изображение" title="Добавить изображение · Ctrl+V или файл">${IMAGE_ICON}</button>` : '';
   const editTools = editMode || attachTool ? `<div class="card-tools">${moveTool}${imageTool}${linkTool}${attachTool}${menu}</div>` : menu;
   const kicker = `<span class="card-kicker-label" ${editMode ? 'contenteditable="true" role="textbox" aria-label="Номер или метка карточки" title="Введите номер для сортировки, например 1"' : ''}>${escapeHtml(card.kicker || 'Заметка')}</span>`;
   const header = `<header class="card-header"><div><p class="card-kicker"><i></i>${kicker}</p><h2 ${editMode ? 'contenteditable="true"' : ''}>${escapeHtml(card.title || 'Без названия')}</h2></div>${editTools}</header>`;
@@ -2213,7 +2243,7 @@ function cardMarkup(card) {
       const markedMoments = meetingHighlightsMarkup(card);
       const segmentsAudio = (card.segments || []).map((segment,index) => `<section class="meeting-segment" data-segment-id="${escapeAttr(segment.id || '')}"><strong>Отрезок ${index + 1} · ${formatDuration(segment.durationSeconds || 0)}</strong>${segment.audioSrc ? `<audio controls src="${escapeAttr(segment.audioSrc)}"></audio>` : ''}${segment.sourceAudio?.mic || segment.sourceAudio?.system ? `<div class="source-tracks">${segment.sourceAudio.mic ? `<label><span>Вы · микрофон</span><audio controls src="${escapeAttr(segment.sourceAudio.mic)}"></audio></label>` : ''}${segment.sourceAudio.system ? `<label><span>Собеседники · звук компьютера</span><audio controls src="${escapeAttr(segment.sourceAudio.system)}"></audio></label>` : ''}</div>` : ''}</section>`).join('');
       const pane = tab === 'summary' ? (structured || '<p class="meeting-empty">Конспект появится после первых содержательных реплик.</p>') : tab === 'cheats' ? cheats : tab === 'transcript' ? (text || `<p class="transcript-pending">${pendingMessage}</p>`) : tab === 'audio' ? (segmentsAudio || '<p class="meeting-empty">Аудио появится после первой паузы.</p>') : nowPane;
-      const languageSelect = `<select class="meeting-language" aria-label="Язык встречи" ${state === 'active' || state === 'pausing' ? 'disabled title="Язык можно изменить после паузы"' : ''}><option value="uk" ${card.meetingLanguage === 'uk' ? 'selected' : ''}>Українська</option><option value="ru" ${card.meetingLanguage === 'ru' ? 'selected' : ''}>Русский</option><option value="en" ${card.meetingLanguage === 'en' ? 'selected' : ''}>English</option></select>`;
+      const languageSelect = `<select class="meeting-language" aria-label="Язык встречи" ${state === 'active' || state === 'pausing' ? 'disabled title="Язык можно изменить после паузы"' : ''}><option value="uk" ${card.meetingLanguage === 'uk' ? 'selected' : ''}>Украинский</option><option value="ru" ${card.meetingLanguage === 'ru' ? 'selected' : ''}>Русский</option><option value="en" ${card.meetingLanguage === 'en' ? 'selected' : ''}>Английский</option></select>`;
       const boardAction = card.structured ? '<button class="open-board-ai" type="button">✦ Главное на доску</button>' : '';
       return `${header}<div class="meeting-hub-head"><span>${stateLabel}</span><div>${languageSelect}${boardAction}${controls}</div></div>${tabBar}<div class="card-content transcript-content meeting-pane">${processing}${pane}${markedMoments}<div class="transcript-actions">${setup}${retry}${rebuildSummary}${aiActionStatus}</div><div class="meta-row"><span>◷ ${escapeHtml(card.duration || '00:00')}</span><span>· ${(card.segments || []).length} отрезков</span></div></div>`;
     }
@@ -2338,8 +2368,7 @@ function bindCardEvents() {
     });
     el.querySelector('.card-attach-image')?.addEventListener('click', () => {
       textImageTarget = { cardId:id };
-      document.querySelector('#text-image-status').textContent = '';
-      document.querySelector('#text-image-choose').disabled = false;
+      updateTextImageDialog();
       textImageInput.value = '';
       textImageDialog.showModal();
     });
@@ -3014,6 +3043,7 @@ function addCard(type) {
   if (type === 'checklist') base.items = [{ text: 'Первый пункт', checked: false }, { text: 'Ещё один пункт', checked: false }];
   else base.content = '<p>Нажмите «Править» и добавьте сюда то, что важно держать под рукой.</p>';
   cards.unshift(base);
+  if (type === 'text') pasteImageCardId = id;
   saveCards('Карточка добавлена');
   render();
   setEditMode(true);
@@ -3132,15 +3162,23 @@ function openSpaceDialog() {
   input.focus();
 }
 
+function showSpaceContext(button, x, y) {
+  spaceContext.dataset.spaceId = button.dataset.space;
+  if (!spaceContext.matches(':popover-open')) spaceContext.showPopover();
+  spaceContext.style.left = `${Math.max(8, Math.min(x, innerWidth - spaceContext.offsetWidth - 8))}px`;
+  spaceContext.style.top = `${Math.max(8, Math.min(y, innerHeight - spaceContext.offsetHeight - 8))}px`;
+  document.querySelector('#space-context-delete').focus({ preventScroll:true });
+}
+
 function openSpaceDeleteDialog(id) {
   const space = workspaces.find(item => item.id === id);
   if (!space) return;
   if (workspaces.length === 1) {
-    showToast('Спочатку додайте інший простір');
+    showToast('Сначала добавьте другое пространство');
     return;
   }
   spaceDeleteDialog.dataset.spaceId = id;
-  document.querySelector('#space-delete-description').textContent = `«${space.title}» буде видалено разом із картками, матеріалами й історією чату.`;
+  document.querySelector('#space-delete-description').textContent = `«${space.title}» будет удалено вместе с карточками, материалами и историей чата.`;
   spaceDeleteDialog.showModal();
 }
 
@@ -3148,7 +3186,7 @@ function deleteSpace(id) {
   const index = workspaces.findIndex(space => space.id === id);
   if (index < 0 || workspaces.length === 1) return false;
   if (recordingStarting || recordingSession?.spaceId === id || (recordingFinishing && recordingSpaceId === id)) {
-    showToast('Завершіть запис перед видаленням простору');
+    showToast('Завершите запись перед удалением пространства');
     return false;
   }
   const remaining = workspaces.filter(space => space.id !== id);
@@ -3158,7 +3196,7 @@ function deleteSpace(id) {
   workspaces = remaining;
   if (current.id !== activeSpaceId) setActiveSpace(current);
   render();
-  showToast('Простір видалено');
+  showToast('Пространство удалено');
   return true;
 }
 
@@ -3224,13 +3262,13 @@ function createSpace(title) {
   workspaces = next;
   setActiveSpace(space);
   render();
-  showToast('Простір створено');
+  showToast('Пространство создано');
   return true;
 }
 
 async function saveImageAsset(file) {
   if (!file?.type.startsWith('image/')) throw new Error('Выберите файл изображения');
-  if (file.size > 20 * 1024 * 1024) throw new Error('Изображение больше 20 МБ');
+  if (file.size > 16 * 1024 * 1024) throw new Error('Изображение больше 16 МБ');
   try {
     if (window.sloy?.saveAsset) {
       const extension = (file.type.slice(6).split('+')[0] || 'png').replace('jpeg', 'jpg');
@@ -3250,7 +3288,6 @@ async function saveImageAsset(file) {
 }
 
 async function attachTextImage(file, cardId, dialogTarget = null) {
-  const status = document.querySelector('#text-image-status');
   const dialogIsOpen = () => dialogTarget && textImageDialog.open && textImageTarget === dialogTarget;
   try {
     const src = await saveImageAsset(file);
@@ -3268,20 +3305,21 @@ async function attachTextImage(file, cardId, dialogTarget = null) {
     if (space.id === activeSpaceId) render();
     showToast('Изображение добавлено к карточке');
   } catch (error) {
-    if (dialogIsOpen()) {
-      status.textContent = error.message;
-      document.querySelector('#text-image-choose').disabled = false;
-    }
+    if (dialogIsOpen()) updateTextImageDialog(error.message);
     else if (!dialogTarget) showToast(error.message);
   }
 }
 
 function attachTextImageFromDialog(file) {
-  const choose = document.querySelector('#text-image-choose');
-  if (!file || !textImageTarget || choose.disabled) return;
-  choose.disabled = true;
-  document.querySelector('#text-image-status').textContent = 'Сохраняю изображение…';
+  if (!file || !textImageTarget || textImageChoose.disabled) return;
+  updateTextImageDialog('Сохраняю изображение…', true);
   void attachTextImage(file, textImageTarget.cardId, textImageTarget);
+}
+
+function updateTextImageDialog(message = '', busy = false) {
+  textImageChoose.disabled = busy;
+  textImagePaste.disabled = busy || !window.sloy?.readClipboardImage;
+  textImageStatus.textContent = message;
 }
 
 async function addImageFile(file, title = '') {
@@ -3301,17 +3339,19 @@ async function addImageFile(file, title = '') {
 function addPastedText(text) {
   const clean = text.trim();
   if (!clean) return;
-  if (/^https?:\/\/\S+$/i.test(clean)) {
+  const isLink = /^https?:\/\/\S+$/i.test(clean);
+  if (isLink) {
     const host = new URL(clean).hostname.replace(/^www\./, '');
     cards.unshift({ id:crypto.randomUUID(), createdAt:Date.now(), type:'links', size:'small', accent:'#627fc0', kicker:'Ссылка', title:host, links:[{ icon:'↗', label:clean, url:clean }] });
   } else {
     const lines = clean.split(/\r?\n/).filter(Boolean);
     const title = (lines.shift() || 'Вставленный текст').slice(0, 80);
     const body = lines.length ? lines : [title];
-    cards.unshift({ id:crypto.randomUUID(), createdAt:Date.now(), type:'text', size:clean.length > 280 ? 'large' : 'medium', accent:randomAccent(), kicker:'Из буфера', title, content:body.map(line => `<p>${escapeHtml(line)}</p>`).join('') });
+    pasteImageCardId = crypto.randomUUID();
+    cards.unshift({ id:pasteImageCardId, createdAt:Date.now(), type:'text', size:clean.length > 280 ? 'large' : 'medium', accent:randomAccent(), kicker:'Из буфера', title, content:body.map(line => `<p>${escapeHtml(line)}</p>`).join('') });
   }
   search.value = '';
-  saveCards('Добавлено из буфера');
+  saveCards(isLink ? 'Ссылка добавлена из буфера' : 'Текст добавлен · Ctrl+V вставит снимок в эту карточку');
   render();
 }
 
@@ -4553,10 +4593,10 @@ function createRecordingCard(session) {
     else render();
     return session.card;
   }
-  const now = new Intl.DateTimeFormat('uk-UA', { day:'numeric', month:'long', hour:'2-digit', minute:'2-digit' }).format(new Date());
+  const now = new Intl.DateTimeFormat('ru-RU', { day:'numeric', month:'long', hour:'2-digit', minute:'2-digit' }).format(new Date());
   const card = {
     id:session.id, createdAt:Date.now(), type:'transcript', size:'large', accent:'#e16663',
-    kicker:'Розмова', title:`Запис · ${now}`, transcript:transcriptText.trim(),
+    kicker:'Разговор', title:`Запись · ${now}`, transcript:transcriptText.trim(),
     duration:formatDuration((Date.now() - session.startedAt) / 1000), audioSrc:'', sourceAudio:{}, processing:session.stopRequested ? 'saving' : 'live:connecting', live:!session.stopRequested,
     meetingVersion:1, meetingState:session.stopRequested ? 'pausing' : 'active', segments:[], activeSegmentId:session.segmentId, revision:0, meetingLanguage:loadAiSettings().transcriptionLanguage || 'uk'
   };
@@ -5015,7 +5055,7 @@ document.querySelector('#space-form').addEventListener('submit', event => {
   event.preventDefault();
   const input = document.querySelector('#space-name');
   if (!input.value.trim()) {
-    input.setCustomValidity('Введіть назву простору');
+    input.setCustomValidity('Введите название пространства');
     input.reportValidity();
     return;
   }
@@ -5024,12 +5064,47 @@ document.querySelector('#space-form').addEventListener('submit', event => {
 });
 document.querySelector('#space-cancel').addEventListener('click', () => spaceDialog.close());
 document.querySelector('#space-name').addEventListener('input', event => event.currentTarget.setCustomValidity(''));
+const spaceList = document.querySelector('.space-list');
+spaceList.addEventListener('contextmenu', event => {
+  const button = event.target.closest('[data-space]');
+  if (!button) return;
+  event.preventDefault();
+  showSpaceContext(button, event.clientX, event.clientY);
+});
+spaceList.addEventListener('keydown', event => {
+  const button = event.target.closest('[data-space]');
+  if (!button || !(event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10'))) return;
+  event.preventDefault();
+  const rect = button.getBoundingClientRect();
+  showSpaceContext(button, rect.left, rect.bottom + 4);
+});
+document.querySelector('#space-context-delete').innerHTML = `${TRASH_ICON}<span>Удалить пространство</span>`;
+document.querySelector('#space-context-delete').addEventListener('click', () => {
+  spaceContext.hidePopover();
+  openSpaceDeleteDialog(spaceContext.dataset.spaceId);
+});
 document.querySelector('#space-delete-form').addEventListener('submit', event => {
   event.preventDefault();
   spaceDeleteDialog.close();
   if (event.submitter?.value === 'delete' && deleteSpace(spaceDeleteDialog.dataset.spaceId)) document.querySelector('.space.active')?.focus();
 });
-document.querySelector('#text-image-choose').addEventListener('click', () => textImageInput.click());
+textImageChoose.addEventListener('click', () => textImageInput.click());
+textImagePaste.addEventListener('click', async () => {
+  const target = textImageTarget;
+  updateTextImageDialog('Читаю буфер обмена…', true);
+  try {
+    const result = await window.sloy.readClipboardImage();
+    if (!textImageDialog.open || target !== textImageTarget) return;
+    if (!result?.ok) {
+      updateTextImageDialog(result?.reason === 'size' ? 'Изображение больше 16 МБ' : 'В буфере обмена нет изображения');
+      return;
+    }
+    updateTextImageDialog('Сохраняю изображение…', true);
+    await attachTextImage(new File([result.bytes], 'Снимок экрана.png', { type:'image/png' }), target.cardId, target);
+  } catch {
+    if (textImageDialog.open && target === textImageTarget) updateTextImageDialog('Не удалось прочитать буфер обмена');
+  }
+});
 textImageInput.addEventListener('change', () => {
   attachTextImageFromDialog(textImageInput.files[0]);
   textImageInput.value = '';
@@ -5101,7 +5176,6 @@ document.querySelector('#workspace-title').addEventListener('blur', event => {
   button.setAttribute('aria-label', title);
   button.querySelector('span').textContent = space.glyph;
   button.querySelector('em').textContent = title;
-  button.parentElement.querySelector('.space-delete').setAttribute('aria-label', `Видалити простір ${title}`);
 });
 
 imageInput.addEventListener('change', event => {
@@ -5124,7 +5198,27 @@ document.querySelectorAll('[data-knowledge-tab]').forEach(button => button.addEv
 document.getElementById('space-chat-send')?.addEventListener('click', () => void sendSpaceChatMessage());
 document.getElementById('space-chat-suggestions')?.addEventListener('click', event => {
   const button = event.target.closest('[data-space-prompt]');
-  if (button) void sendSpaceChatMessage(button.dataset.spacePrompt);
+  if (!button || spaceChatBusy) return;
+  spaceChatInput.value = button.dataset.spacePrompt;
+  spaceChatInput.focus();
+  spaceChatInput.setSelectionRange(spaceChatInput.value.length, spaceChatInput.value.length);
+});
+spaceChatFeed.addEventListener('click', async event => {
+  if (event.target.closest('[data-open-materials]')) {
+    setKnowledgeHubTab('materials');
+    knowledgeInput.focus();
+    return;
+  }
+  const button = event.target.closest('[data-copy-chat]');
+  const message = button && workspaceKnowledge().chat.find(item => item.id === button.dataset.copyChat);
+  if (!message) return;
+  try {
+    const result = await window.sloy.copyText(message.text);
+    button.textContent = result?.ok ? 'Скопировано' : 'Ошибка копирования';
+  } catch {
+    button.textContent = 'Ошибка копирования';
+  }
+  setTimeout(() => { if (button.isConnected) button.textContent = 'Копировать'; }, 1800);
 });
 spaceChatInput?.addEventListener('keydown', event => {
   if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendSpaceChatMessage(); }
@@ -5180,13 +5274,15 @@ document.addEventListener('paste', event => {
   if (textImageDialog.open) {
     event.preventDefault();
     if (imageItem) attachTextImageFromDialog(imageItem.getAsFile());
-    else if (!document.querySelector('#text-image-choose').disabled) document.querySelector('#text-image-status').textContent = 'В буфере обмена нет изображения';
+    else if (!textImageChoose.disabled) updateTextImageDialog('В буфере обмена нет изображения');
     return;
   }
   if (document.querySelector('dialog[open]')) return;
   const focused = document.activeElement;
   if (imageItem) {
-    const cardId = focused.closest('.card')?.dataset.id;
+    const focusedCard = focused.closest('.card');
+    const isEditing = focused.matches('input, textarea, [contenteditable="true"]');
+    const cardId = focusedCard?.dataset.id || (!isEditing ? pasteImageCardId : null);
     if (cards.some(card => card.id === cardId && card.type === 'text')) {
       event.preventDefault();
       void attachTextImage(imageItem.getAsFile(), cardId);
@@ -5203,9 +5299,19 @@ document.addEventListener('paste', event => {
   if (text) { event.preventDefault(); addPastedText(text); }
 });
 
+document.addEventListener('pointerdown', event => {
+  if (!board.contains(event.target) && !event.target.closest('.workspace')) return;
+  const target = event.target.closest('.card');
+  const id = target?.dataset.id;
+  pasteImageCardId = cards.some(card => card.id === id && card.type === 'text') ? id : null;
+  board.querySelector('.image-paste-target')?.classList.remove('image-paste-target');
+  if (pasteImageCardId) target.classList.add('image-paste-target');
+}, true);
+
 document.addEventListener('keydown', event => {
   if (document.querySelector('dialog[open]')) return;
   if (event.key === 'Escape') {
+    if (spaceContext.matches(':popover-open')) return;
     if (recordingSession || recordingStarting) {
       event.preventDefault();
       requestHide();
@@ -5247,29 +5353,29 @@ window.sloy?.onHiding(() => {
 });
 
 // ══════════════════════════════════════════
-// ТЕМА — перемикач темна / світла
+// Тема оформления
 // ══════════════════════════════════════════
 (function initTheme() {
-  const saved = safeStorageGet('sloy.theme') || 'dark';
-  if (saved === 'light') document.body.classList.add('light-theme');
-  updateThemeBtns(saved);
+  const options = [...document.querySelectorAll('[data-theme-choice]')];
+  const apply = theme => {
+    document.body.dataset.theme = theme;
+    const isLight = theme === 'light' || theme === 'sand';
+    document.body.classList.toggle('light-theme', isLight);
+    document.documentElement.style.colorScheme = isLight ? 'light' : 'dark';
+    options.forEach(button => {
+      const active = button.dataset.themeChoice === theme;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-pressed', String(active));
+    });
+  };
+  const saved = safeStorageGet('sloy.theme');
+  apply(options.some(button => button.dataset.themeChoice === saved) ? saved : 'dark');
+  options.forEach(button => button.addEventListener('click', () => {
+    const theme = button.dataset.themeChoice;
+    apply(theme);
+    safeStorageSet('sloy.theme', theme);
+  }));
 })();
-
-function updateThemeBtns(theme) {
-  document.getElementById('theme-dark')?.classList.toggle('active', theme !== 'light');
-  document.getElementById('theme-light')?.classList.toggle('active', theme === 'light');
-}
-
-document.getElementById('theme-dark')?.addEventListener('click', () => {
-  document.body.classList.remove('light-theme');
-  safeStorageSet('sloy.theme', 'dark');
-  updateThemeBtns('dark');
-});
-document.getElementById('theme-light')?.addEventListener('click', () => {
-  document.body.classList.add('light-theme');
-  safeStorageSet('sloy.theme', 'light');
-  updateThemeBtns('light');
-});
 
 // ══════════════════════════════════════════
 // ШРИФТ — вибір і збереження
