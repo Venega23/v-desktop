@@ -2,6 +2,8 @@ const STORAGE_KEY = 'sloy.cards.v1';
 const SPACES_KEY = 'sloy.spaces.v2';
 const ACTIVE_SPACE_KEY = 'sloy.active-space.v2';
 let spacesStorageWritesBlocked = false;
+const TRASH_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5"/></svg>';
+const IMAGE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="9" r="1.5"/><path d="m4 17 4-4 3 3 4-5 5 6"/></svg>';
 let pendingStorageNotice = '';
 let storageNoticeTimer = null;
 
@@ -397,6 +399,10 @@ if (window.sloy?.isDesktop) document.body.classList.add('desktop-shell');
 const recordButton = document.querySelector('#record-button');
 const coachButton = document.querySelector('#coach-button');
 const spaceDialog = document.querySelector('#space-dialog');
+const spaceDeleteDialog = document.querySelector('#space-delete-dialog');
+const textImageDialog = document.querySelector('#text-image-dialog');
+const textImageInput = document.querySelector('#text-image-input');
+let textImageTarget = null;
 const knowledgeDialog = document.getElementById('knowledge-dialog');
 const knowledgeFeed = document.getElementById('knowledge-feed');
 const knowledgeInput = document.getElementById('knowledge-input');
@@ -1012,11 +1018,11 @@ function scheduleGoogleSheetsSync(delay = 1200) {
   googleSheetsSyncTimer = setTimeout(flushGoogleSheetsSync, delay);
 }
 
-function persistWorkspaces() {
-  const spacesSaved = safeJsonStorageSet(SPACES_KEY, workspaces);
-  const activeSpaceSaved = safeStorageSet(ACTIVE_SPACE_KEY, activeSpaceId);
-  if (spacesSaved && activeSpaceSaved) scheduleGoogleSheetsSync();
-  return spacesSaved && activeSpaceSaved;
+function persistWorkspaces(nextWorkspaces = workspaces, nextActiveSpaceId = activeSpaceId) {
+  if (!safeJsonStorageSet(SPACES_KEY, nextWorkspaces)) return false;
+  safeStorageSet(ACTIVE_SPACE_KEY, nextActiveSpaceId);
+  scheduleGoogleSheetsSync();
+  return true;
 }
 
 function activeMeeting(space = activeSpace()) {
@@ -1702,12 +1708,19 @@ function saveCards(message = 'Изменения сохранены') {
 function renderSpaces() {
   const list = document.querySelector('.space-list');
   const recordingSpId = recordingSession?.spaceId;
-  list.innerHTML = workspaces.map(space => `<button class="space ${space.id === activeSpaceId ? 'active' : ''} ${space.id === recordingSpId ? 'space-recording' : ''}" data-space="${escapeAttr(space.id)}" aria-label="${escapeAttr(space.title)}"><span>${escapeHtml(space.glyph)}</span><em>${escapeHtml(space.title)}</em>${space.id === recordingSpId ? '<i class="rec-dot"></i>' : ''}</button>`).join('') + `<button class="space add-space" aria-label="Додати простір"><span>+</span><em>Додати</em></button>`;
+  list.innerHTML = workspaces.map(space => {
+    const active = space.id === activeSpaceId;
+    const recording = space.id === recordingSpId;
+    const id = escapeAttr(space.id);
+    const title = escapeAttr(space.title);
+    return `<div class="space-row"><button class="space ${active ? 'active' : ''} ${recording ? 'space-recording' : ''}" data-space="${id}" aria-label="${title}" ${active ? 'aria-current="true"' : ''}><span>${escapeHtml(space.glyph)}</span><em>${escapeHtml(space.title)}</em>${recording ? '<i class="rec-dot"></i>' : ''}</button><button type="button" class="space-delete" data-delete-space="${id}" aria-label="Видалити простір ${title}" title="Видалити простір">${TRASH_ICON}</button></div>`;
+  }).join('') + '<button class="space add-space" aria-label="Додати простір"><span>+</span><em>Додати</em></button>';
   const current = activeSpace();
   document.querySelector('#workspace-title').textContent = current.title;
   document.querySelector('.workspace-glyph').textContent = current.glyph;
   document.getElementById('knowledge-count').textContent = current.knowledge?.items?.length || 0;
   list.querySelectorAll('[data-space]').forEach(button => button.addEventListener('click', () => switchSpace(button.dataset.space)));
+  list.querySelectorAll('[data-delete-space]').forEach(button => button.addEventListener('click', () => openSpaceDeleteDialog(button.dataset.deleteSpace)));
   list.querySelector('.add-space').addEventListener('click', openSpaceDialog);
 }
 
@@ -1820,14 +1833,19 @@ function restoreCrossSpaceMove(entry) {
 
 function switchSpace(id) {
   if (id === activeSpaceId) return;
+  const space = workspaces.find(item => item.id === id);
+  if (!space) return;
   activeSpace().cards = cards;
-  activeSpaceId = id;
-  selectedIds.clear();
-  cards = activeSpace().cards;
-  search.value = '';
+  setActiveSpace(space);
   saveCards('Пространство открыто');
-  renderSpaces();
   render();
+}
+
+function setActiveSpace(space) {
+  activeSpaceId = space.id;
+  selectedIds.clear();
+  cards = space.cards;
+  search.value = '';
 }
 
 function displayCards(sourceCards = cards, view = activeSpace().view) {
@@ -2142,11 +2160,12 @@ function meetingAiActionStatusMarkup(card) {
 }
 
 function cardMarkup(card) {
-  const menu = `<button class="card-menu" aria-label="Действия с карточкой" title="Удалить">···</button>`;
+  const menu = `<button type="button" class="card-menu" aria-label="Удалить карточку" title="Удалить карточку">${TRASH_ICON}</button>`;
   const imageTool = card.type === 'image' ? `<button class="image-settings" title="Настроить изображение" aria-label="Настроить изображение">⌁</button>` : '';
   const linkTool = card.type === 'links' ? `<button class="link-settings" title="Изменить ссылку" aria-label="Изменить ссылку">✎</button>` : '';
   const moveTool = editMode ? '<button class="drag-handle" type="button" aria-label="Переместить карточку" title="Потяните, чтобы переместить карточку или выделенную группу">⠿</button>' : '';
-  const editTools = editMode ? `<div class="card-tools">${moveTool}${imageTool}${linkTool}${menu}</div>` : menu;
+  const attachTool = card.type === 'text' ? `<button type="button" class="card-attach-image" aria-label="Добавить изображение" title="Добавить изображение">${IMAGE_ICON}</button>` : '';
+  const editTools = editMode || attachTool ? `<div class="card-tools">${moveTool}${imageTool}${linkTool}${attachTool}${menu}</div>` : menu;
   const kicker = `<span class="card-kicker-label" ${editMode ? 'contenteditable="true" role="textbox" aria-label="Номер или метка карточки" title="Введите номер для сортировки, например 1"' : ''}>${escapeHtml(card.kicker || 'Заметка')}</span>`;
   const header = `<header class="card-header"><div><p class="card-kicker"><i></i>${kicker}</p><h2 ${editMode ? 'contenteditable="true"' : ''}>${escapeHtml(card.title || 'Без названия')}</h2></div>${editTools}</header>`;
 
@@ -2200,7 +2219,10 @@ function cardMarkup(card) {
     }
     return `${header}<div class="card-content transcript-content">${processing}${structured}${legacyImportant}${suggestion}${text}<div class="transcript-actions">${setup}${retry}${rebuildSummary}${aiActionStatus}</div>${sourceTracks}${card.audioSrc ? `<audio controls src="${escapeAttr(card.audioSrc)}"></audio>` : ''}<div class="meta-row"><span>◷ ${escapeHtml(card.duration || '00:00')}</span><span>· Локальная запись</span></div></div>`;
   }
-  return `${header}<div class="card-content" ${editMode ? 'contenteditable="true"' : ''}>${card.content || '<p>Новая заметка</p>'}</div>`;
+  const content = `<div class="card-content" ${editMode ? 'contenteditable="true"' : ''}>${card.content || '<p>Новая заметка</p>'}</div>`;
+  if (!card.images?.length) return `${header}${content}`;
+  const images = card.images.map(image => `<img src="${escapeAttr(image.src)}" alt="${escapeAttr(image.title || 'Изображение к заметке')}" draggable="false" loading="lazy" decoding="async">`).join('');
+  return `${header}<div class="text-card-body">${content}<div class="text-card-images">${images}</div></div>`;
 }
 
 function resetImageZoomPreview() {
@@ -2313,6 +2335,13 @@ function bindCardEvents() {
     el.querySelector('.card-menu')?.addEventListener('click', event => {
       event.stopPropagation();
       removeCard(id);
+    });
+    el.querySelector('.card-attach-image')?.addEventListener('click', () => {
+      textImageTarget = { cardId:id };
+      document.querySelector('#text-image-status').textContent = '';
+      document.querySelector('#text-image-choose').disabled = false;
+      textImageInput.value = '';
+      textImageDialog.showModal();
     });
     el.querySelectorAll('input[type="checkbox"]').forEach(input => input.addEventListener('change', () => {
       const card = cards.find(c => c.id === id);
@@ -3096,9 +3125,41 @@ function randomAccent() {
 }
 
 function openSpaceDialog() {
-  document.querySelector('#space-name').value = '';
+  const input = document.querySelector('#space-name');
+  input.value = '';
+  input.setCustomValidity('');
   spaceDialog.showModal();
-  setTimeout(() => document.querySelector('#space-name').focus(), 30);
+  input.focus();
+}
+
+function openSpaceDeleteDialog(id) {
+  const space = workspaces.find(item => item.id === id);
+  if (!space) return;
+  if (workspaces.length === 1) {
+    showToast('Спочатку додайте інший простір');
+    return;
+  }
+  spaceDeleteDialog.dataset.spaceId = id;
+  document.querySelector('#space-delete-description').textContent = `«${space.title}» буде видалено разом із картками, матеріалами й історією чату.`;
+  spaceDeleteDialog.showModal();
+}
+
+function deleteSpace(id) {
+  const index = workspaces.findIndex(space => space.id === id);
+  if (index < 0 || workspaces.length === 1) return false;
+  if (recordingStarting || recordingSession?.spaceId === id || (recordingFinishing && recordingSpaceId === id)) {
+    showToast('Завершіть запис перед видаленням простору');
+    return false;
+  }
+  const remaining = workspaces.filter(space => space.id !== id);
+  const current = id === activeSpaceId ? remaining[Math.min(index, remaining.length - 1)] : activeSpace();
+  activeSpace().cards = cards;
+  if (!persistWorkspaces(remaining, current.id)) return false;
+  workspaces = remaining;
+  if (current.id !== activeSpaceId) setActiveSpace(current);
+  render();
+  showToast('Простір видалено');
+  return true;
 }
 
 function openImageDialog(id) {
@@ -3153,43 +3214,87 @@ async function openExternalLink(value) {
 
 function createSpace(title) {
   const cleanTitle = title.trim();
-  if (!cleanTitle) return;
+  if (!cleanTitle) return false;
   const words = cleanTitle.split(/\s+/);
   const glyph = words.slice(0, 2).map(word => word[0]).join('').toLocaleUpperCase('ru');
   const space = { id: crypto.randomUUID(), title: cleanTitle, glyph: glyph || '•', view:{ layout:'dashboard', sort:'manual' }, cards: [] };
-  workspaces.push(space);
-  activeSpaceId = space.id;
-  cards = space.cards;
-  saveCards('Пространство создано');
+  activeSpace().cards = cards;
+  const next = [...workspaces, space];
+  if (!persistWorkspaces(next, space.id)) return false;
+  workspaces = next;
+  setActiveSpace(space);
   render();
+  showToast('Простір створено');
+  return true;
+}
+
+async function saveImageAsset(file) {
+  if (!file?.type.startsWith('image/')) throw new Error('Выберите файл изображения');
+  if (file.size > 20 * 1024 * 1024) throw new Error('Изображение больше 20 МБ');
+  try {
+    if (window.sloy?.saveAsset) {
+      const extension = (file.type.slice(6).split('+')[0] || 'png').replace('jpeg', 'jpg');
+      const saved = await window.sloy.saveAsset({ bytes:await file.arrayBuffer(), extension });
+      if (!saved?.url) throw new Error('asset_save');
+      return saved.url;
+    }
+    return await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(reader.error || new Error('file_read'));
+      reader.readAsDataURL(file);
+    });
+  } catch {
+    throw new Error('Не удалось сохранить изображение');
+  }
+}
+
+async function attachTextImage(file, cardId, dialogTarget = null) {
+  const status = document.querySelector('#text-image-status');
+  const dialogIsOpen = () => dialogTarget && textImageDialog.open && textImageTarget === dialogTarget;
+  try {
+    const src = await saveImageAsset(file);
+    if (dialogTarget && !dialogIsOpen()) return;
+    const space = workspaces.find(item => item.cards.some(card => card.id === cardId));
+    const card = space?.cards.find(item => item.id === cardId && item.type === 'text');
+    if (!card) throw new Error('Карточка была удалена');
+    const previousImages = card.images;
+    card.images = [...(previousImages || []), { src, title:file.name?.replace(/\.[^.]+$/, '') }];
+    if (!persistWorkspaces()) {
+      card.images = previousImages;
+      throw new Error('Не удалось сохранить изменения карточки');
+    }
+    if (dialogIsOpen()) textImageDialog.close();
+    if (space.id === activeSpaceId) render();
+    showToast('Изображение добавлено к карточке');
+  } catch (error) {
+    if (dialogIsOpen()) {
+      status.textContent = error.message;
+      document.querySelector('#text-image-choose').disabled = false;
+    }
+    else if (!dialogTarget) showToast(error.message);
+  }
+}
+
+function attachTextImageFromDialog(file) {
+  const choose = document.querySelector('#text-image-choose');
+  if (!file || !textImageTarget || choose.disabled) return;
+  choose.disabled = true;
+  document.querySelector('#text-image-status').textContent = 'Сохраняю изображение…';
+  void attachTextImage(file, textImageTarget.cardId, textImageTarget);
 }
 
 async function addImageFile(file, title = '') {
-  if (!file || !file.type.startsWith('image/')) return;
-  if (file.size > 20 * 1024 * 1024) { showToast('Изображение больше 20 МБ'); return; }
+  if (!file) return;
   try {
-    const bytes = await file.arrayBuffer();
-    let src;
-    if (window.sloy?.saveAsset) {
-      const extension = (file.type.split('/')[1] || 'png').replace('jpeg', 'jpg');
-      const saved = await window.sloy.saveAsset({ bytes, extension });
-      if (!saved?.url) throw new Error('asset_save');
-      src = saved.url;
-    } else {
-      src = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.onerror = () => reject(reader.error || new Error('file_read'));
-        reader.readAsDataURL(file);
-      });
-    }
+    const src = await saveImageAsset(file);
     const time = new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' }).format(new Date());
     cards.unshift({ id:crypto.randomUUID(), createdAt:Date.now(), type:'image', size:'wide', accent:'#627fc0', kicker:'Скриншот', title:title || file.name?.replace(/\.[^.]+$/, '') || `Скриншот · ${time}`, src, linkUrl:'', imageFit:'contain' });
     search.value = '';
     saveCards('Изображение добавлено из буфера');
     render();
-  } catch {
-    showToast('Не удалось сохранить изображение · попробуйте ещё раз');
+  } catch (error) {
+    showToast(error.message);
   }
 }
 
@@ -4908,9 +5013,26 @@ document.querySelector('#record-mark').addEventListener('click', () => {
 });
 document.querySelector('#space-form').addEventListener('submit', event => {
   event.preventDefault();
-  if (event.submitter?.value === 'cancel') { spaceDialog.close(); return; }
-  createSpace(document.querySelector('#space-name').value);
+  const input = document.querySelector('#space-name');
+  if (!input.value.trim()) {
+    input.setCustomValidity('Введіть назву простору');
+    input.reportValidity();
+    return;
+  }
   spaceDialog.close();
+  if (createSpace(input.value)) document.querySelector('.space.active')?.focus();
+});
+document.querySelector('#space-cancel').addEventListener('click', () => spaceDialog.close());
+document.querySelector('#space-name').addEventListener('input', event => event.currentTarget.setCustomValidity(''));
+document.querySelector('#space-delete-form').addEventListener('submit', event => {
+  event.preventDefault();
+  spaceDeleteDialog.close();
+  if (event.submitter?.value === 'delete' && deleteSpace(spaceDeleteDialog.dataset.spaceId)) document.querySelector('.space.active')?.focus();
+});
+document.querySelector('#text-image-choose').addEventListener('click', () => textImageInput.click());
+textImageInput.addEventListener('change', () => {
+  attachTextImageFromDialog(textImageInput.files[0]);
+  textImageInput.value = '';
 });
 document.querySelector('#recording-preflight-form')?.addEventListener('submit', event => {
   event.preventDefault();
@@ -4969,11 +5091,17 @@ document.querySelector('#image-form').addEventListener('submit', event => {
 });
 document.querySelector('#workspace-title').addEventListener('blur', event => {
   const title = event.currentTarget.textContent.trim();
-  if (!title) { event.currentTarget.textContent = activeSpace().title; return; }
-  activeSpace().title = title;
-  activeSpace().glyph = title.split(/\s+/).slice(0,2).map(word => word[0]).join('').toLocaleUpperCase('ru');
+  const space = activeSpace();
+  if (!title || title === space.title) { event.currentTarget.textContent = space.title; return; }
+  space.title = title;
+  space.glyph = title.split(/\s+/).slice(0,2).map(word => word[0]).join('').toLocaleUpperCase('ru');
   saveCards('Название сохранено');
-  renderSpaces();
+  document.querySelector('.workspace-glyph').textContent = space.glyph;
+  const button = document.querySelector('.space.active');
+  button.setAttribute('aria-label', title);
+  button.querySelector('span').textContent = space.glyph;
+  button.querySelector('em').textContent = title;
+  button.parentElement.querySelector('.space-delete').setAttribute('aria-label', `Видалити простір ${title}`);
 });
 
 imageInput.addEventListener('change', event => {
@@ -5048,8 +5176,24 @@ knowledgeInput?.addEventListener('paste', event => {
 });
 
 document.addEventListener('paste', event => {
-  if (document.activeElement.matches('input, textarea, [contenteditable="true"]')) return;
   const imageItem = [...event.clipboardData.items].find(item => item.type.startsWith('image/'));
+  if (textImageDialog.open) {
+    event.preventDefault();
+    if (imageItem) attachTextImageFromDialog(imageItem.getAsFile());
+    else if (!document.querySelector('#text-image-choose').disabled) document.querySelector('#text-image-status').textContent = 'В буфере обмена нет изображения';
+    return;
+  }
+  if (document.querySelector('dialog[open]')) return;
+  const focused = document.activeElement;
+  if (imageItem) {
+    const cardId = focused.closest('.card')?.dataset.id;
+    if (cards.some(card => card.id === cardId && card.type === 'text')) {
+      event.preventDefault();
+      void attachTextImage(imageItem.getAsFile(), cardId);
+      return;
+    }
+  }
+  if (focused.matches('input, textarea, [contenteditable="true"]')) return;
   if (imageItem) {
     event.preventDefault();
     addImageFile(imageItem.getAsFile());
@@ -5060,8 +5204,8 @@ document.addEventListener('paste', event => {
 });
 
 document.addEventListener('keydown', event => {
+  if (document.querySelector('dialog[open]')) return;
   if (event.key === 'Escape') {
-    if (document.querySelector('dialog[open]')) return;
     if (recordingSession || recordingStarting) {
       event.preventDefault();
       requestHide();

@@ -116,7 +116,23 @@
       <h2>Новое пространство</h2>
       <p>Отдельное место для работы, проекта или личных материалов.</p>
       <label>Название<input id="space-name" maxlength="32" placeholder="Например, Новый проект" required></label>
-      <div class="dialog-actions"><button value="cancel" formnovalidate>Отмена</button><button class="dialog-primary" value="create" id="space-create">Создать</button></div>
+      <div class="dialog-actions"><button type="button" id="space-cancel">Отмена</button><button class="dialog-primary" value="create" id="space-create">Создать</button></div>
+    </form>
+  </dialog>
+  <dialog class="space-dialog" id="space-delete-dialog" aria-labelledby="space-delete-title">
+    <form method="dialog" id="space-delete-form">
+      <h2 id="space-delete-title">Видалити простір?</h2>
+      <p id="space-delete-description"></p>
+      <div class="dialog-actions"><button value="cancel" autofocus>Скасувати</button><button class="dialog-danger" value="delete">Видалити</button></div>
+    </form>
+  </dialog>
+  <dialog class="space-dialog" id="text-image-dialog" aria-labelledby="text-image-title">
+    <form method="dialog">
+      <h2 id="text-image-title">Добавить изображение</h2>
+      <p>Нажмите Ctrl+V, чтобы вставить изображение из буфера, или выберите файл.</p>
+      <output id="text-image-status" aria-live="polite"></output>
+      <input id="text-image-input" type="file" accept="image/*" hidden>
+      <div class="dialog-actions"><button value="cancel" autofocus>Отмена</button><button type="button" class="dialog-primary" id="text-image-choose">Выбрать файл</button></div>
     </form>
   </dialog>
   <dialog class="space-dialog link-dialog" id="link-dialog">
