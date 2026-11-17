@@ -1972,7 +1972,9 @@ function render() {
   if (dashboard) ensureCardPositions();
   board.innerHTML = '';
   const visibleCards = dashboard ? cards.filter(card => !card.detachedMeeting) : cards;
-  displayCards(visibleCards, view).forEach((card, index) => {
+  const displayed = displayCards(visibleCards, view);
+  if (dashboard) displayed.sort((a, b) => (a.position.layer || 0) - (b.position.layer || 0));
+  displayed.forEach((card, index) => {
     const el = document.createElement('article');
     el.className = `card ${card.size || 'medium'} ${card.type === 'image' ? 'image-card' : ''} ${card.type === 'transcript' ? 'transcript-card' : ''} ${card.boardCheatSource ? 'board-cheat-card' : ''} ${card.antischoolVersion ? 'antischool-card' : ''}`;
     el.dataset.id = card.id;
@@ -3247,13 +3249,11 @@ function createSpace(title) {
   return true;
 }
 
-async function saveImageAsset(file) {
-  if (!file?.type.startsWith('image/')) throw new Error('Выберите файл изображения');
-  if (file.size > 16 * 1024 * 1024) throw new Error('Изображение больше 16 МБ');
+async function saveImageAsset(file, bytes) {
   try {
     if (window.sloy?.saveAsset) {
       const extension = (file.type.slice(6).split('+')[0] || 'png').replace('jpeg', 'jpg');
-      const saved = await window.sloy.saveAsset({ bytes:await file.arrayBuffer(), extension });
+      const saved = await window.sloy.saveAsset({ bytes, extension });
       if (!saved?.url) throw new Error('asset_save');
       return saved.url;
     }
@@ -3268,17 +3268,92 @@ async function saveImageAsset(file) {
   }
 }
 
-async function addImageFile(file, title = '') {
+const pendingImagePastes = new Set();
+
+function nextBoardLayer(space, card) {
+  return space.cards.reduce((top, item) => item === card ? top : Math.max(top, item.position?.layer || 0), 0) + 1;
+}
+
+function imagePositionOnBoard(space, card) {
+  const gap = 14;
+  const width = Math.max(1, board.clientWidth - 2 * gap);
+  const height = Math.max(1, board.clientHeight - 2 * gap);
+  const columns = width > 1350 ? 4 : width > 920 ? 3 : 2;
+  const w = Math.min(width, Math.max(160, (width - (columns - 1) * gap) / columns));
+  const h = Math.min(height, 240);
+  const occupied = space.cards.filter(item => item !== card && !item.detachedMeeting && item.position).map(item => item.position);
+  let best;
+  let bestOverlap = Infinity;
+  for (let y = gap; y <= gap + height - h; y += 24) {
+    for (let x = gap; x <= gap + width - w; x += 24) {
+      const candidate = { x, y, w, h };
+      const overlap = occupied.reduce((total, rect) => {
+        const dx = Math.min(x + w + gap, rect.x + rect.w + gap) - Math.max(x, rect.x);
+        const dy = Math.min(y + h + gap, rect.y + rect.h + gap) - Math.max(y, rect.y);
+        return total + Math.max(0, dx) * Math.max(0, dy);
+      }, 0);
+      if (overlap === 0) return candidate;
+      if (overlap < bestOverlap) { best = candidate; bestOverlap = overlap; }
+    }
+  }
+  return { ...best, layer:nextBoardLayer(space, card) };
+}
+
+function revealBoardImage(card) {
+  if (search.value) { search.value = ''; filterCards(''); }
+  if (activeSpace().view.layout !== 'dashboard') board.querySelector(`[data-id="${CSS.escape(card.id)}"]`)?.scrollIntoView({ block:'nearest', inline:'nearest' });
+}
+
+async function addImageFile(file, title = '', fromClipboard = false) {
   if (!file) return;
+  if (!file.type.startsWith('image/')) { showToast('Выберите файл изображения'); return; }
+  if (file.size > 16 * 1024 * 1024) { showToast('Изображение больше 16 МБ'); return; }
+  const space = activeSpace();
+  let pendingKey;
   try {
-    const src = await saveImageAsset(file);
+    const bytes = await file.arrayBuffer();
+    const hash = await crypto.subtle.digest('SHA-256', bytes);
+    const imageHash = [...new Uint8Array(hash)].map(byte => byte.toString(16).padStart(2,'0')).join('');
+    if (fromClipboard) {
+      const existing = space.cards.find(card => card.type === 'image' && card.imageHash === imageHash);
+      if (existing) {
+        if (space.id === activeSpaceId) {
+          if (space.view.layout === 'dashboard') {
+            const box = existing.position;
+            if (!box || box.x + box.w > board.clientWidth || box.y + box.h > board.clientHeight || box.x < 0 || box.y < 0) {
+              existing.position = imagePositionOnBoard(space, existing);
+              render();
+            } else {
+              const layer = nextBoardLayer(space, existing);
+              if ((box.layer || 0) < layer) { box.layer = layer; render(); }
+            }
+          }
+          revealBoardImage(existing);
+          showToast('Этот снимок уже есть на доске');
+        }
+        return;
+      }
+      const key = `${space.id}:${imageHash}`;
+      if (pendingImagePastes.has(key)) return;
+      pendingImagePastes.add(key);
+      pendingKey = key;
+    }
+    const src = await saveImageAsset(file, bytes);
+    if (!workspaces.includes(space)) return;
     const time = new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' }).format(new Date());
-    cards.unshift({ id:crypto.randomUUID(), createdAt:Date.now(), type:'image', size:'wide', accent:'#627fc0', kicker:'Скриншот', title:title || file.name?.replace(/\.[^.]+$/, '') || `Скриншот · ${time}`, src, linkUrl:'', imageFit:'contain' });
-    search.value = '';
-    saveCards('Изображение добавлено из буфера');
-    render();
+    const card = { id:crypto.randomUUID(), createdAt:Date.now(), type:'image', size:'wide', accent:'#627fc0', kicker:'Скриншот', title:title || file.name?.replace(/\.[^.]+$/, '') || `Скриншот · ${time}`, src, imageHash, linkUrl:'', imageFit:'contain' };
+    if (space.view.layout === 'dashboard') card.position = imagePositionOnBoard(space, card);
+    space.cards.unshift(card);
+    if (!persistWorkspaces()) { space.cards.shift(); return; }
+    if (space.id === activeSpaceId) {
+      render();
+      revealBoardImage(card);
+    }
+    showToast('Изображение добавлено');
   } catch (error) {
     showToast(error.message);
+  } finally {
+    if (pendingKey) pendingImagePastes.delete(pendingKey);
   }
 }
 
@@ -5198,7 +5273,7 @@ document.addEventListener('paste', event => {
   const imageItem = [...event.clipboardData.items].find(item => item.type.startsWith('image/'));
   if (imageItem) {
     event.preventDefault();
-    addImageFile(imageItem.getAsFile());
+    void addImageFile(imageItem.getAsFile(), '', true);
     return;
   }
   const text = event.clipboardData.getData('text/plain');
