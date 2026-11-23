@@ -805,6 +805,10 @@ body.rail-resizing, body.rail-resizing * { cursor: col-resize !important; user-s
 .workspace-glyph { width: 32px; height: 32px; flex: 0 0 32px; }
 .space-list { margin-top: 14px; align-items: stretch; gap: 5px; overflow: auto; }
 .space { width: 100%; min-height: 40px; display: flex; align-items: center; gap: 9px; padding: 3px 7px; border-radius: 11px; }
+.space[data-space] { touch-action:none; }
+.space.space-reordering { opacity:.55; cursor:grabbing; }
+.space.space-reorder-before { box-shadow:0 -2px var(--violet); }
+.space.space-reorder-after { box-shadow:0 2px var(--violet); }
 .space-context { position: fixed; inset: auto; margin: 0; padding: 5px; border: 1px solid var(--line); border-radius: 12px; color: var(--ink); background: #242836; box-shadow: var(--shadow); }
 .space-context button { display: flex; align-items: center; gap: 9px; padding: 8px 10px; border: 0; border-radius: 7px; color: #ffacb4; background: transparent; cursor: pointer; font-size: 12px; }
 .space-context button:is(:hover,:focus-visible) { background: rgba(239,111,114,.12); }
@@ -1026,7 +1030,7 @@ body:not(.edit-mode) .layout-gallery .card,body:not(.edit-mode) .layout-list .ca
 .freeform-board .card h2,
 .freeform-board .card input,
 .freeform-board .card a { user-select: text; }
-.freeform-board .image-card { padding: 0; border: 0; border-radius: 20px; background: transparent; box-shadow: none; backdrop-filter: none; overflow: visible; }
+.freeform-board .image-card { min-width:32px; min-height:24px; padding: 0; border: 0; border-radius: 20px; background: transparent; box-shadow: none; backdrop-filter: none; overflow: visible; }
 .freeform-board .image-card:hover { background: transparent; box-shadow: none; transform: none; }
 .freeform-board .image-card .image-wrap {
   width: 100%; height: 100%; min-height: 0; overflow: hidden;

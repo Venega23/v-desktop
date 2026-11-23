@@ -2944,8 +2944,8 @@ function bindLiveResize(el, id) {
       if (Math.hypot(dw, dh) >= 2) changed = true;
       moveEvent.preventDefault();
       starts.forEach(({ item, w, h }) => {
-        item.position.w = Math.max(160, Math.min(w + dw, board.clientWidth - item.position.x));
-        item.position.h = Math.max(110, Math.min(h + dh, board.clientHeight - item.position.y));
+        item.position.w = Math.max(item.type === 'image' ? 32 : 160, Math.min(w + dw, board.clientWidth - item.position.x));
+        item.position.h = Math.max(item.type === 'image' ? 24 : 110, Math.min(h + dh, board.clientHeight - item.position.y));
         const targetEl = board.querySelector(`[data-id="${CSS.escape(item.id)}"]`);
         if (targetEl) { targetEl.style.width = `${item.position.w}px`; targetEl.style.height = `${item.position.h}px`; }
       });
@@ -3034,6 +3034,7 @@ function addCard(type) {
 }
 
 function setEditMode(enabled) {
+  if (!enabled) flushDebouncedSave('Изменения сохранены');
   editMode = enabled;
   if (!enabled) selectedIds.clear();
   document.body.classList.toggle('edit-mode', enabled);
@@ -5084,6 +5085,55 @@ document.querySelector('#space-form').addEventListener('submit', event => {
 document.querySelector('#space-cancel').addEventListener('click', () => spaceDialog.close());
 document.querySelector('#space-name').addEventListener('input', event => event.currentTarget.setCustomValidity(''));
 const spaceList = document.querySelector('.space-list');
+let suppressSpaceClick = false;
+spaceList.addEventListener('click', event => {
+  if (!suppressSpaceClick) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+}, true);
+spaceList.addEventListener('pointerdown', event => {
+  const button = event.target.closest('[data-space]');
+  if (event.button !== 0 || !button) return;
+  const startY = event.clientY;
+  let dragging = false;
+  let target = null;
+  let after = false;
+  const clear = () => spaceList.querySelectorAll('.space-reorder-before,.space-reorder-after').forEach(item => item.classList.remove('space-reorder-before','space-reorder-after'));
+  const move = current => {
+    if (!dragging && Math.abs(current.clientY - startY) < 6) return;
+    dragging = true;
+    current.preventDefault();
+    button.classList.add('space-reordering');
+    clear();
+    target = document.elementFromPoint(current.clientX, current.clientY)?.closest('.space[data-space]');
+    if (!target || target === button) { target = null; return; }
+    const rect = target.getBoundingClientRect();
+    after = current.clientY > rect.top + rect.height / 2;
+    target.classList.add(after ? 'space-reorder-after' : 'space-reorder-before');
+  };
+  const finish = current => {
+    document.removeEventListener('pointermove', move, true);
+    document.removeEventListener('pointerup', finish, true);
+    document.removeEventListener('pointercancel', finish, true);
+    button.classList.remove('space-reordering');
+    clear();
+    if (!dragging) return;
+    suppressSpaceClick = true;
+    setTimeout(() => { suppressSpaceClick = false; }, 0);
+    if (!target || current.type === 'pointercancel') return;
+    const next = workspaces.filter(space => space.id !== button.dataset.space);
+    const index = next.findIndex(space => space.id === target.dataset.space);
+    const moving = workspaces.find(space => space.id === button.dataset.space);
+    if (!moving || index < 0) return;
+    next.splice(index + Number(after), 0, moving);
+    if (!persistWorkspaces(next)) return;
+    workspaces = next;
+    renderSpaces();
+  };
+  document.addEventListener('pointermove', move, { capture:true, passive:false });
+  document.addEventListener('pointerup', finish, true);
+  document.addEventListener('pointercancel', finish, true);
+});
 spaceList.addEventListener('contextmenu', event => {
   const button = event.target.closest('[data-space]');
   if (!button) return;
@@ -5281,6 +5331,27 @@ document.addEventListener('paste', event => {
 });
 
 document.addEventListener('keydown', event => {
+  if (event.isComposing) return;
+  if (event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
+    const focused = document.activeElement;
+    const form = focused.closest('#link-form,#image-form,#ai-settings-form');
+    if (form && focused.matches('input:not([type="checkbox"]),select')) {
+      event.preventDefault();
+      form.requestSubmit(form.querySelector('.dialog-primary'));
+      return;
+    }
+    if (focused.id === 'workspace-title') {
+      event.preventDefault();
+      focused.blur();
+      return;
+    }
+    if (editMode && !document.querySelector('dialog[open]') && (focused.closest('.card') || !focused.closest('input,textarea,button,[contenteditable="true"]'))) {
+      event.preventDefault();
+      focused.blur();
+      setEditMode(false);
+      return;
+    }
+  }
   if (document.querySelector('dialog[open]')) return;
   if (event.key === 'Escape') {
     if (spaceContext.matches(':popover-open')) return;
