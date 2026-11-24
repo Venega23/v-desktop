@@ -263,7 +263,7 @@ assert.match(app, /document\.addEventListener\('keyup',[\s\S]{0,180}resetImageZo
 assert.match(app, /imageWrap\?\.addEventListener\('dblclick'[\s\S]{0,300}openExternalLink/, 'Double-clicking a linked image must open its URL');
 assert.match(css, /\.image-card\.image-zoom-preview \{[^}]*overflow:visible !important/, 'Temporarily zoomed images must escape the card boundary');
 assert.match(css, /\.image-card\.image-zoom-preview \.image-wrap \{[^}]*border-color:transparent !important[^}]*box-shadow:none !important/, 'The image frame must disappear during temporary zoom');
-assert.match(css, /\.image-card\.image-zoom-preview \.card-header,[\s\S]{0,120}opacity:0 !important/, 'Card chrome must stay hidden while the image preview is active');
+assert.match(css, /\.image-card\.image-zoom-preview \.compact-actions-toggle[^}]*opacity:0 !important/, 'Card actions must stay hidden while the image preview is active');
 assert.match(app, /function cardsInNumberOrder[\s\S]{0,900}a\.number - b\.number/, 'Numeric card sorting must order numbered kickers from low to high');
 assert.match(app, /\(\?=\$\|\\s\|\[·\.\\-:\]\)/, 'A bare number such as "1" must be accepted as a sortable card number');
 assert.match(app, /card-kicker-label[\s\S]{0,300}contenteditable="true"[\s\S]{0,180}Номер или метка карточки/, 'The visible card label must be editable as a number or text tag');

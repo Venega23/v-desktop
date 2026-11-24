@@ -1978,6 +1978,8 @@ function render() {
     const el = document.createElement('article');
     el.className = `card ${card.size || 'medium'} ${card.type === 'image' ? 'image-card' : ''} ${card.type === 'transcript' ? 'transcript-card' : ''} ${card.boardCheatSource ? 'board-cheat-card' : ''} ${card.antischoolVersion ? 'antischool-card' : ''}`;
     el.dataset.id = card.id;
+    const singleLink = card.type === 'links' && card.links.length === 1;
+    el.classList.toggle('single-link-card', singleLink);
     el.classList.toggle('selected', selectedIds.has(card.id));
     el.style.setProperty('--accent', card.accent || '#7065e8');
     el.style.animationDelay = `${Math.min(index * 28, 190)}ms`;
@@ -1988,12 +1990,13 @@ function render() {
       el.style.height = `${card.position.h}px`;
     } else if (view.layout === 'gallery') {
       el.style.setProperty('--flow-columns', String(Math.max(1, Math.min(3, Number(card.flowColumns) || 1))));
-      el.style.setProperty('--flow-rows', String(Math.max(2, Math.min(10, Number(card.flowRows) || 4))));
+      el.style.setProperty('--flow-rows', String(Math.max(singleLink ? 1 : 2, Math.min(10, Number(card.flowRows) || (singleLink ? 1 : 4)))));
       el.style.left = `${Number(card.flowOffsetX) || 0}px`;
       el.style.top = `${Number(card.flowOffsetY) || 0}px`;
       el.style.zIndex = String(Math.max(0, Number(card.flowLayer) || 0));
     } else {
-      el.style.setProperty('--flow-list-height', `${Math.max(90, Math.min(720, Number(card.flowHeight) || 90))}px`);
+      const minHeight = singleLink ? 36 : 90;
+      el.style.setProperty('--flow-list-height', `${Math.max(minHeight, Math.min(720, Number(card.flowHeight) || minHeight))}px`);
       el.style.left = `${Number(card.flowOffsetX) || 0}px`;
       el.style.top = `${Number(card.flowOffsetY) || 0}px`;
       el.style.zIndex = String(Math.max(0, Number(card.flowLayer) || 0));
@@ -2026,7 +2029,8 @@ function ensureCardPositions() {
     const width = card.type === 'image' ? columnWidth : columnWidth * span + gap * (span - 1);
     const plainLength = String(card.content || card.transcript || '').replace(/<[^>]+>/g, '').length;
     const itemCount = card.items?.length || card.structured?.keyPoints?.length || 0;
-    const baseHeight = Math.max(card.autoHeight || 0, card.type === 'image' ? 240 : card.type === 'transcript' ? 430 : Math.min(520, Math.max(card.size === 'small' ? 190 : 235, 150 + plainLength * .34 + itemCount * 24)));
+    const singleLink = card.type === 'links' && card.links.length === 1;
+    const baseHeight = singleLink ? 52 : Math.max(card.autoHeight || 0, card.type === 'image' ? 240 : card.type === 'transcript' ? 430 : Math.min(520, Math.max(card.size === 'small' ? 190 : 235, 150 + plainLength * .34 + itemCount * 24)));
     let placed = null;
     const maxBottom = occupied.reduce((max, rect) => Math.max(max, rect.y + rect.h), 0);
     for (let y = 14; y <= maxBottom + 900 && !placed; y += 22) {
@@ -2180,14 +2184,18 @@ function meetingAiActionStatusMarkup(card) {
   return `<span class="meeting-ai-action-status ready">✓ ${label}${time ? ` · ${escapeHtml(time)}` : ''}</span>`;
 }
 
+function compactCardActions(actions) {
+  return `<button class="compact-actions-toggle" type="button" aria-label="Действия с карточкой" title="Действия с карточкой" aria-expanded="false">⋯</button><div class="compact-actions" popover>${actions}</div>`;
+}
+
 function cardMarkup(card) {
   const menu = `<button type="button" class="card-menu" aria-label="Удалить карточку" title="Удалить карточку">${TRASH_ICON}</button>`;
-  const imageTool = card.type === 'image' ? `<button class="image-settings" title="Настроить изображение" aria-label="Настроить изображение">⌁</button>` : '';
   const linkTool = card.type === 'links' ? `<button class="link-settings" title="Изменить ссылку" aria-label="Изменить ссылку">✎</button>` : '';
   const moveTool = editMode ? '<button class="drag-handle" type="button" aria-label="Переместить карточку" title="Потяните, чтобы переместить карточку или выделенную группу">⠿</button>' : '';
-  const editTools = editMode ? `<div class="card-tools">${moveTool}${imageTool}${linkTool}${menu}</div>` : menu;
-  const kicker = `<span class="card-kicker-label" ${editMode ? 'contenteditable="true" role="textbox" aria-label="Номер или метка карточки" title="Введите номер для сортировки, например 1"' : ''}>${escapeHtml(card.kicker || 'Заметка')}</span>`;
-  const header = `<header class="card-header"><div><p class="card-kicker"><i></i>${kicker}</p><h2 ${editMode ? 'contenteditable="true"' : ''}>${escapeHtml(card.title || 'Без названия')}</h2></div>${editTools}</header>`;
+  const editTools = editMode ? `<div class="card-tools">${moveTool}${linkTool}${menu}</div>` : menu;
+  const label = card.kicker?.trim() || '';
+  const kicker = label || editMode ? `<p class="card-kicker">${label ? '<i></i>' : ''}<span class="card-kicker-label" ${editMode ? 'contenteditable="true" role="textbox" aria-label="Номер или метка карточки" data-placeholder="Метка"' : ''}>${escapeHtml(label)}</span></p>` : '';
+  const header = `<header class="card-header"><div>${kicker}<h2 title="${escapeAttr(card.title || 'Без названия')}" ${editMode ? 'contenteditable="true"' : ''}>${escapeHtml(card.title || 'Без названия')}</h2></div>${editTools}</header>`;
 
   if (card.type === 'checklist') {
     const checked = card.items.filter(item => item.checked).length;
@@ -2199,12 +2207,18 @@ function cardMarkup(card) {
     return `${header}<div class="card-content">${people}</div>`;
   }
   if (card.type === 'links') {
+    if (card.links.length === 1) {
+      const link = card.links[0];
+      const actions = `${editMode ? '<button class="link-settings" type="button">Изменить ссылку</button>' : ''}<button class="card-menu" type="button">Удалить карточку</button>`;
+      return `<a class="quick-link single-link" href="${escapeAttr(link.url)}" title="${escapeAttr(link.url)}"><span>${escapeHtml(card.title || link.label || link.url)}</span><em aria-hidden="true">↗</em></a>${compactCardActions(actions)}`;
+    }
     const links = card.links.map(l => `<a class="quick-link" href="${escapeAttr(l.url)}" target="_blank"><b>${escapeHtml(l.icon)}</b><span>${escapeHtml(l.label)}</span><em>↗</em></a>`).join('');
     return `${header}<div class="card-content link-list">${links}</div>`;
   }
   if (card.type === 'image') {
     const linked = Boolean(card.linkUrl);
-    return `<div class="image-wrap ${linked ? 'has-link' : ''}" ${linked ? 'tabindex="0" role="link"' : ''} data-link="${escapeAttr(card.linkUrl || '')}"><img src="${escapeAttr(card.src)}" alt="${escapeAttr(card.title || 'Добавленное изображение')}" draggable="false" loading="lazy" decoding="async" style="object-fit:${card.imageFit || 'contain'}"><span class="image-zoom-indicator" aria-live="polite">100%</span>${linked ? '<button class="link-badge image-link-action" type="button" aria-label="Перейти по ссылке" title="Открыть в браузере">↗</button>' : ''}</div>${header}`;
+    const actions = `${linked ? '<button class="image-link-action" type="button">Открыть ссылку</button>' : ''}<button class="image-settings" type="button">Настроить изображение</button><button class="card-menu" type="button">Удалить карточку</button>`;
+    return `<div class="image-wrap ${linked ? 'has-link' : ''}" ${linked ? 'tabindex="0" role="link"' : ''} title="${escapeAttr(card.title || 'Изображение')}" data-link="${escapeAttr(card.linkUrl || '')}"><img src="${escapeAttr(card.src)}" alt="${escapeAttr(card.title || 'Добавленное изображение')}" draggable="false" loading="lazy" decoding="async" style="object-fit:${card.imageFit || 'contain'}"><span class="image-zoom-indicator" aria-live="polite">100%</span></div><h2 class="image-list-title">${escapeHtml(card.title || 'Изображение')}</h2>${compactCardActions(actions)}`;
   }
   if (card.type === 'transcript') {
     if (card.structured) card.structured = sanitizeRecap(card.structured);
@@ -2371,16 +2385,24 @@ function bindCardEvents() {
       card.title = event.currentTarget.textContent.trim();
       debouncedSave();
     });
+    const imageActions = el.querySelector('.compact-actions');
+    const imageActionsToggle = el.querySelector('.compact-actions-toggle');
+    imageActionsToggle?.addEventListener('click', () => {
+      const rect = imageActionsToggle.getBoundingClientRect();
+      imageActions.togglePopover();
+      if (!imageActions.matches(':popover-open')) return;
+      imageActions.style.left = `${Math.max(4, Math.min(rect.right - imageActions.offsetWidth, innerWidth - imageActions.offsetWidth - 4))}px`;
+      imageActions.style.top = `${rect.bottom + imageActions.offsetHeight <= innerHeight - 4 ? rect.bottom : Math.max(4, rect.top - imageActions.offsetHeight)}px`;
+    });
+    imageActions?.addEventListener('toggle', () => imageActionsToggle.setAttribute('aria-expanded', String(imageActions.matches(':popover-open'))));
+    imageActions?.addEventListener('click', () => { if (imageActions.matches(':popover-open')) imageActions.hidePopover(); }, true);
     const kicker = el.querySelector('.card-kicker-label[contenteditable]');
     kicker?.addEventListener('input', event => {
       const card = cards.find(c => c.id === id);
       card.kicker = event.currentTarget.textContent.trim();
+      const dot = event.currentTarget.previousElementSibling;
+      if (dot) dot.hidden = !card.kicker;
       debouncedSave();
-    });
-    kicker?.addEventListener('keydown', event => {
-      if (event.key !== 'Enter') return;
-      event.preventDefault();
-      event.currentTarget.blur();
     });
     const content = el.querySelector('.card-content[contenteditable]');
     content?.addEventListener('input', event => {
@@ -2554,7 +2576,8 @@ function bindCardEvents() {
       event.stopPropagation();
       const session = getImageZoomPreview(el, id);
       if (!session) return;
-      session.zoom = Math.max(.5, Math.min(4, Math.round((session.zoom + (event.deltaY < 0 ? .1 : -.1)) * 10) / 10));
+      if (!event.deltaY) return;
+      session.zoom = Math.max(.5, Math.min(4, Math.round((session.zoom + (event.deltaY < 0 ? .15 : -.15)) * 100) / 100));
       applyImageZoomPreview(session);
     }, { passive:false });
     imageWrap?.addEventListener('pointerdown', event => beginImageZoomPan(event, el));
@@ -2717,6 +2740,12 @@ async function requestMeetingBoardCards(meeting, form) {
   }
 }
 
+let selectingCardText = false;
+board.addEventListener('pointerdown', () => { selectingCardText = false; }, true);
+board.addEventListener('mousedown', event => {
+  selectingCardText = !editMode && event.detail >= 2 && !!event.target.closest('.card h2,.card-content');
+}, true);
+
 function bindDirectDrag(el, id) {
   el.addEventListener('pointerdown', event => {
     const dragHandle = event.target.closest('.drag-handle');
@@ -2737,6 +2766,7 @@ function bindDirectDrag(el, id) {
       clearSpaceDropTarget();
     };
     const onMove = moveEvent => {
+      if (selectingCardText) return;
       const dx = moveEvent.clientX - startX;
       const dy = moveEvent.clientY - startY;
       if (!moved && Math.hypot(dx, dy) < 4) return;
@@ -2801,6 +2831,7 @@ function bindFlowFreeDrag(el, id) {
       clearSpaceDropTarget();
     };
     const onMove = moveEvent => {
+      if (selectingCardText) return;
       const dx = moveEvent.clientX - startX + (board.scrollLeft - startScrollLeft);
       const dy = moveEvent.clientY - startY + (board.scrollTop - startScrollTop);
       if (!moved && Math.hypot(dx, dy) < 1) return;
@@ -2874,8 +2905,11 @@ function bindFlowResize(el, id) {
     const columnGap = parseFloat(styles.columnGap) || 12;
     const rowGap = parseFloat(styles.rowGap) || 12;
     const startColumns = Math.max(1, Math.min(3, Number(card.flowColumns) || 1));
-    const startRows = Math.max(2, Math.min(10, Number(card.flowRows) || 4));
-    const startHeight = Math.max(90, Number(card.flowHeight) || rect.height);
+    const singleLink = el.classList.contains('single-link-card');
+    const minRows = singleLink ? 1 : 2;
+    const minHeight = singleLink ? 36 : 90;
+    const startRows = Math.max(minRows, Math.min(10, Number(card.flowRows) || (singleLink ? 1 : 4)));
+    const startHeight = Math.max(minHeight, Number(card.flowHeight) || rect.height);
     const columnPitch = (rect.width - columnGap * (startColumns - 1)) / startColumns + columnGap;
     const rowSize = parseFloat(styles.gridAutoRows) || 66;
     const rowPitch = rowSize + rowGap;
@@ -2892,14 +2926,14 @@ function bindFlowResize(el, id) {
       if (layout === 'gallery') {
         const maxColumns = Math.max(1, Math.min(3, Math.floor((board.clientWidth + columnGap) / Math.max(1, columnPitch))));
         const columns = Math.max(1, Math.min(maxColumns, Math.round((rect.width + moveEvent.clientX - startX + columnGap) / columnPitch)));
-        const rows = Math.max(2, Math.min(10, Math.round((rect.height + moveEvent.clientY - startY + rowGap) / rowPitch)));
+        const rows = Math.max(minRows, Math.min(10, Math.round((rect.height + moveEvent.clientY - startY + rowGap) / rowPitch)));
         changed ||= columns !== startColumns || rows !== startRows;
         card.flowColumns = columns;
         card.flowRows = rows;
         el.style.setProperty('--flow-columns', String(columns));
         el.style.setProperty('--flow-rows', String(rows));
       } else {
-        const height = Math.max(90, Math.min(720, Math.round(startHeight + moveEvent.clientY - startY)));
+        const height = Math.max(minHeight, Math.min(720, Math.round(startHeight + moveEvent.clientY - startY)));
         changed ||= height !== startHeight;
         card.flowHeight = height;
         el.style.setProperty('--flow-list-height', `${height}px`);
@@ -2944,8 +2978,9 @@ function bindLiveResize(el, id) {
       if (Math.hypot(dw, dh) >= 2) changed = true;
       moveEvent.preventDefault();
       starts.forEach(({ item, w, h }) => {
-        item.position.w = Math.max(item.type === 'image' ? 32 : 160, Math.min(w + dw, board.clientWidth - item.position.x));
-        item.position.h = Math.max(item.type === 'image' ? 24 : 110, Math.min(h + dh, board.clientHeight - item.position.y));
+        const singleLink = item.type === 'links' && item.links.length === 1;
+        item.position.w = Math.max(item.type === 'image' ? 32 : singleLink ? 96 : 126, Math.min(w + dw, board.clientWidth - item.position.x));
+        item.position.h = Math.max(item.type === 'image' ? 24 : singleLink ? 36 : 90, Math.min(h + dh, board.clientHeight - item.position.y));
         const targetEl = board.querySelector(`[data-id="${CSS.escape(item.id)}"]`);
         if (targetEl) { targetEl.style.width = `${item.position.w}px`; targetEl.style.height = `${item.position.h}px`; }
       });
@@ -3023,7 +3058,7 @@ function addCard(type) {
   if (type === 'image') { imageInput.click(); return; }
   if (type === 'link') { addMenu.hidden = true; openLinkDialog(); return; }
   const id = `card-${Date.now()}`;
-  const base = { id, createdAt:Date.now(), type, size: type === 'checklist' ? 'medium' : 'small', accent: randomAccent(), kicker: type === 'link' ? 'Ссылка' : 'Новое', title: type === 'checklist' ? 'Новый список' : type === 'link' ? 'Полезная ссылка' : 'Новая заметка' };
+  const base = { id, createdAt:Date.now(), type, size: type === 'checklist' ? 'medium' : 'small', accent: randomAccent(), kicker:'', title: type === 'checklist' ? 'Новый список' : type === 'link' ? 'Полезная ссылка' : 'Новая заметка' };
   if (type === 'checklist') base.items = [{ text: 'Первый пункт', checked: false }, { text: 'Ещё один пункт', checked: false }];
   else base.content = '<p>Нажмите «Править» и добавьте сюда то, что важно держать под рукой.</p>';
   cards.unshift(base);
@@ -5331,7 +5366,7 @@ document.addEventListener('paste', event => {
 });
 
 document.addEventListener('keydown', event => {
-  if (event.isComposing) return;
+  if (event.isComposing || event.defaultPrevented) return;
   if (event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
     const focused = document.activeElement;
     const form = focused.closest('#link-form,#image-form,#ai-settings-form');
@@ -5345,7 +5380,7 @@ document.addEventListener('keydown', event => {
       focused.blur();
       return;
     }
-    if (editMode && !document.querySelector('dialog[open]') && (focused.closest('.card') || !focused.closest('input,textarea,button,[contenteditable="true"]'))) {
+    if (editMode && !document.querySelector('dialog[open]') && !focused.closest('button,a,select') && (focused.closest('.card') || !focused.closest('input,textarea,[contenteditable="true"]'))) {
       event.preventDefault();
       focused.blur();
       setEditMode(false);
@@ -5354,7 +5389,7 @@ document.addEventListener('keydown', event => {
   }
   if (document.querySelector('dialog[open]')) return;
   if (event.key === 'Escape') {
-    if (spaceContext.matches(':popover-open')) return;
+    if (spaceContext.matches(':popover-open') || board.querySelector('.compact-actions:popover-open')) return;
     if (recordingSession || recordingStarting) {
       event.preventDefault();
       requestHide();
