@@ -2218,7 +2218,8 @@ function cardMarkup(card) {
   if (card.type === 'image') {
     const linked = Boolean(card.linkUrl);
     const actions = `${linked ? '<button class="image-link-action" type="button">Открыть ссылку</button>' : ''}<button class="image-settings" type="button">Настроить изображение</button><button class="card-menu" type="button">Удалить карточку</button>`;
-    return `<div class="image-wrap ${linked ? 'has-link' : ''}" ${linked ? 'tabindex="0" role="link"' : ''} title="${escapeAttr(card.title || 'Изображение')}" data-link="${escapeAttr(card.linkUrl || '')}"><img src="${escapeAttr(card.src)}" alt="${escapeAttr(card.title || 'Добавленное изображение')}" draggable="false" loading="lazy" decoding="async" style="object-fit:${card.imageFit || 'contain'}"><span class="image-zoom-indicator" aria-live="polite">100%</span></div><h2 class="image-list-title">${escapeHtml(card.title || 'Изображение')}</h2>${compactCardActions(actions)}`;
+    const caption = card.title?.trim() ? `<span class="image-caption" aria-hidden="true">${escapeHtml(card.title)}</span>` : '';
+    return `<div class="image-wrap ${linked ? 'has-link' : ''}" ${linked ? 'tabindex="0" role="link"' : ''} title="${escapeAttr(card.title || 'Изображение')}" data-link="${escapeAttr(card.linkUrl || '')}"><img src="${escapeAttr(card.src)}" alt="${escapeAttr(card.title || 'Добавленное изображение')}" draggable="false" loading="lazy" decoding="async" style="object-fit:${card.imageFit || 'contain'}">${caption}<span class="image-zoom-indicator" aria-live="polite">100%</span></div>${compactCardActions(actions)}`;
   }
   if (card.type === 'transcript') {
     if (card.structured) card.structured = sanitizeRecap(card.structured);
@@ -2577,7 +2578,7 @@ function bindCardEvents() {
       const session = getImageZoomPreview(el, id);
       if (!session) return;
       if (!event.deltaY) return;
-      session.zoom = Math.max(.5, Math.min(4, Math.round((session.zoom + (event.deltaY < 0 ? .15 : -.15)) * 100) / 100));
+      session.zoom = Math.max(.5, Math.min(4, Math.round((session.zoom + (event.deltaY < 0 ? .3 : -.3)) * 10) / 10));
       applyImageZoomPreview(session);
     }, { passive:false });
     imageWrap?.addEventListener('pointerdown', event => beginImageZoomPan(event, el));
